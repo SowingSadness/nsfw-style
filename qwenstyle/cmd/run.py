@@ -282,7 +282,8 @@ def print_plan(cfg: RunConfig, info: dict[str, Any]) -> None:
     if len(inputs) > 1:                              # одиночный путь печатается как раньше
         print(f"[plan] референсы ({len(inputs)}): {', '.join(inputs)}", flush=True)
     print(f"[plan] steps={info.get('steps')} precision={info.get('precision')} "
-          f"offload={info.get('offload')} guidance={info.get('guidance')} lora={lora_text}", flush=True)
+          f"offload={info.get('offload')} kv_cache={cfg.generation.kv_cache} "
+          f"guidance={info.get('guidance')} lora={lora_text}", flush=True)
     print(f"[plan] cache key={info.get('embeds_key')} (stage={info.get('embeds_stage')}, "
           f"cached={_yes_no(info.get('embeds_cached'))}) -> encoder needed: "
           f"{_yes_no(info.get('need_encoder'))}", flush=True)

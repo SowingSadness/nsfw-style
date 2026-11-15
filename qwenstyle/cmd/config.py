@@ -67,6 +67,7 @@ def describe(cfg: RunConfig) -> list[str]:
         f"generation.precision={gen.precision}",
         f"generation.precision_cache={_fmt(gen.precision_cache)}",
         f"generation.offload={gen.offload}",
+        f"generation.kv_cache={gen.kv_cache}",
         f"generation.sampler_kwargs={_fmt(gen.sampler_kwargs)}",
         f"upscale.backend={up.backend}",
         f"upscale.factor={_fmt(up.factor)}",

@@ -36,6 +36,11 @@ generation:
   precision: fp8
   precision_cache: cache/fp8_transformer
   offload: none
+  # Префиксный KV-кеш (K/V текста и референсов, считается на шаге 0): `auto-offload-ref2` — один
+  # референс с `true` влезает (768p: 15.2 ГиБ, 14 с), два — OOM (префикс 4.6 ГиБ), поэтому при 2+
+  # кеш уезжает в RAM (`offload`, ~+13 % времени). Значения: true|offload|false|auto-offload-ref2.
+  # Замеры: docs/bench/kv-cache-offload.md. Переопределение: `--set generation.kv_cache=…`.
+  kv_cache: auto-offload-ref2
   sampler_kwargs: {}
 
 upscale:

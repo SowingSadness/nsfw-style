@@ -23,13 +23,18 @@ LoRA-тензоров (fp8 `addmm` не реализован), `enable_group_off
 
 * `offload_blocks` (по умолчанию 1) и `offload_stream` (1) — параметры `enable_group_offload`;
 * `rebuild_precision_cache` (он же `rebuild_fp8_cache`) — эквивалент `--rebuild-fp8-cache`
-  из `run_style.py`: пересобрать fp8-кэш вместо чтения готового;
-* `kv_cache` (`true`|`false`|`offload`) — где живёт префиксный KV-кеш трансформера (текст +
-  все референсы, считается на шаге 0 и стоит ~512 КиБ VRAM на токен): `true` — в VRAM
-  (как раньше), `offload` — в RAM с послойной подкачкой (`qwen_kv.install_offload`, бит-в-бит),
-  `false` — без кеша (префикс пересчитывается каждый шаг).
+  из `run_style.py`: пересобрать fp8-кэш вместо чтения готового.
 
-Всё это объявлено в `parameters()` вместе с `steps`/`guidance`/`offload`/`precision`/`max_images`:
+Префиксный KV-кеш живёт в поле ядра `generation.kv_cache` (а не в `sampler_kwargs`: его ставит
+`presets/base.yaml`, а наследующие `base` пресеты чужих моделей не должны падать на неизвестном
+ключе).
+Значения (`KV_CACHE_MODES`): `true` — K/V текста и всех референсов в VRAM (быстро),
+`offload` — в RAM с послойной подкачкой (`qwen_kv.install_offload`, бит-в-бит, ~+13 % времени),
+`false` — без кеша (префикс пересчитывается каждый шаг, ~2× медленнее),
+`auto-offload-ref2` (умолчание) — `true` при одном референсе, `offload` при 2+.
+Цифры и порог: `docs/bench/kv-cache-offload.md`.
+
+Всё остальное (`steps`/`guidance`/`offload`/`precision`/`max_images`) объявлено в `parameters()`:
 это единственный источник, по которому ядро проверяет `--set` и печатает `--explain-params`.
 """
 from __future__ import annotations
@@ -57,6 +62,10 @@ TURBO_LORA = "fusal-qwen-image-2.1-turbo-e6-preview-r128.safetensors"
 #: Запасные пути fp8-кэша (кеш моделей, шаг 4: `cache/models/...`); пресеты главнее.
 DEFAULT_FP8_CACHE = {"base": "cache/models/fp8_transformer",
                      "turbo": "cache/models/fp8_transformer_turbo"}
+
+#: Допустимые значения `generation.kv_cache`. `auto-offload-ref2` — умолчание: один референс с
+#: `true` влезает (768p, 15.2 ГиБ), два — OOM (замер в `docs/bench/kv-cache-offload.md`).
+KV_CACHE_MODES: tuple[str, ...] = ("auto-offload-ref2", "true", "offload", "false")
 
 
 # --------------------------------------------------------------------------- #
@@ -112,26 +121,41 @@ def _sampler_int(cfg: Any, key: str, default: int) -> int:
 
 
 def _kv_cache_mode(cfg: Any) -> str:
-    """Режим префиксного KV-кеша (`generation.sampler_kwargs.kv_cache`) -> `true|false|offload`.
+    """Объявленный режим KV-кеша -> `true|false|offload|auto-offload-ref2`.
 
-    Значение приходит строкой из `--set`/пресета или bool'ом из `_coerce` ядра, поэтому
-    нормализуются регистр и `1|0|on|off|yes|no`; пустое = умолчание `true` (прежнее поведение).
+    Канонический путь — `generation.kv_cache` (поле `GenerationConfig`, стоит в `presets/base.yaml`).
+    Нормализуются регистр и `1|0|on|off|yes|no`; пустое = умолчание `auto-offload-ref2`.
     Неизвестное значение — `ValueError` с перечнем допустимых (страховка поверх валидации ядра:
     тот же текст печатается без трейсбека, `cmd/run.py` ловит `ValueError` -> exit 2).
     """
-    raw = _sampler_kwarg(cfg, "kv_cache", "true")
+    raw = getattr(cfg.generation, "kv_cache", None)
+    if raw is None:
+        raw = "auto-offload-ref2"
     if isinstance(raw, bool):
         return "true" if raw else "false"
-    value = str(raw).strip().lower()
+    value = str(raw).strip().lower().replace("_", "-")
     aliases = {"1": "true", "on": "true", "yes": "true",
-               "0": "false", "off": "false", "no": "false", "": "true"}
+               "0": "false", "off": "false", "no": "false", "": "auto-offload-ref2",
+               "auto": "auto-offload-ref2", "auto-ref2": "auto-offload-ref2"}
     value = aliases.get(value, value)
-    if value not in ("true", "false", "offload"):
+    if value not in KV_CACHE_MODES:
         raise ValueError(
-            f"generation.sampler_kwargs.kv_cache: неизвестное значение {raw!r}; "
-            f"допустимо true|false|offload"
+            f"generation.kv_cache: неизвестное значение {raw!r}; "
+            f"допустимо {'|'.join(KV_CACHE_MODES)}"
         )
     return value
+
+
+def _resolve_kv_cache(mode: str, refs: int) -> str:
+    """Режим по объявленному значению и числу референсов (`auto-offload-ref2` -> offload при 2+).
+
+    Замер (`docs/bench/kv-cache-offload.md`): на 1376×768 один референс с `kv_cache=true` влезает
+    (15.2 ГиБ, 14 с), два — OOM на шаге 0 (префикс 4.6 ГиБ). Поэтому умолчание `auto-offload-ref2`:
+    ровно в том случае, где `true` ломается, кеш уезжает в RAM (`offload`, цена ~+13 % времени).
+    """
+    if mode == "auto-offload-ref2":
+        return "offload" if int(refs) > 1 else "true"
+    return mode
 
 
 def _rebuild_requested(cfg: Any) -> bool:
@@ -477,9 +501,10 @@ class QwenImage21Backend:
                           doc="блоков трансформера на GPU одновременно (offload=group)"),
             ParameterSpec("offload_stream", "sampler", "bool", True,
                           doc="асинхронная префетч-загрузка блоков (offload=group)"),
-            ParameterSpec("kv_cache", "sampler", "enum", "true",
-                          choices=("true", "false", "offload"),
-                          doc="префиксный KV-кеш (текст + референсы, кешируется на шаге 0): "
+            ParameterSpec("kv_cache", "generation", "enum", "auto-offload-ref2",
+                          choices=KV_CACHE_MODES,
+                          doc="префиксный KV-кеш (текст + референсы, считается на шаге 0, ~512 КиБ/токен): "
+                              "auto-offload-ref2 = true при 1 рефе и offload при 2+ (умолчание), "
                               "true = в VRAM (быстро), offload = в RAM с послойной подкачкой "
                               "(меньше VRAM, бит-в-бит), false = без кеша (префикс пересчитывается "
                               "каждый шаг)"),
@@ -824,9 +849,10 @@ class QwenImage21Backend:
         списка считает латенты по каждому референсу (`prepare_latents(vae_images)`) и склеивает
         их перед латентами кадра.
 
-        `generation.sampler_kwargs.kv_cache` — раскладка префиксного KV-кеша (текст + все
-        референсы, считается один раз на шаге 0): `true` — в VRAM (по умолчанию, как раньше),
-        `offload` — в RAM с послойной подкачкой (`qwen_kv.install_offload`), `false` — без кеша.
+        `generation.kv_cache` — раскладка префиксного KV-кеша (текст + все референсы, считается
+        один раз на шаге 0): `true` — в VRAM, `offload` — в RAM с послойной подкачкой
+        (`qwen_kv.install_offload`), `false` — без кеша, `auto-offload-ref2` (умолчание) — `true`
+        при одном референсе и `offload` при двух и более.
         """
         torch = _torch()
         images = as_image_list(image)
@@ -853,12 +879,16 @@ class QwenImage21Backend:
         handle.pipe.encode_prompt = cached_encode_prompt
 
         # Префиксный KV-кеш: `offload` держит K/V в RAM и подкачивает послойно (патч класса кеша,
-        # снимается в `finally`), `false` считает префикс заново каждый шаг, `true` — как раньше.
-        kv_mode = _kv_cache_mode(cfg)
+        # снимается в `finally`), `false` считает префикс заново каждый шаг, `true` — в VRAM.
+        # `auto-offload-ref2` разрешается по числу референсов: где `true` ломается (2+), тот режим
+        # и включается — см. `_resolve_kv_cache`.
+        declared = _kv_cache_mode(cfg)
+        kv_mode = _resolve_kv_cache(declared, len(input_images))
         steps = int(handle.steps)
         refs = f", референсов {len(input_images)}" if len(input_images) > 1 else ""
+        auto = f" (auto-offload-ref2 -> {kv_mode})" if declared != kv_mode else ""
         print(f"[5/5] генерация: {steps} шагов @ res {resolution}{refs}"
-              f"{' (preview)' if cfg.is_preview else ''}, kv_cache={kv_mode}", flush=True)
+              f"{' (preview)' if cfg.is_preview else ''}, kv_cache={kv_mode}{auto}", flush=True)
         started = time.time()
         if kv_mode == "offload":
             from .qwen_kv import install_offload

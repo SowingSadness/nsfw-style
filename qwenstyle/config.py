@@ -495,6 +495,11 @@ class GenerationConfig:
     precision: str = "fp8"
     precision_cache: str | None = None
     offload: str = "none"
+    # Раскладка префиксного KV-кеша (текст + референсы). Читает только `qwen_image21`; остальные
+    # бекенды поле игнорируют, поэтому оно и живёт в ядре, а не в `sampler_kwargs` (иначе
+    # наследующий `base` пресет чужой модели падал бы на неизвестном ключе).
+    # `auto-offload-ref2` = `true` при одном референсе, `offload` при 2+ (замер: docs/bench/kv-cache-offload.md).
+    kv_cache: str = "auto-offload-ref2"
     sampler_kwargs: dict[str, Any] = field(default_factory=dict)
 
 

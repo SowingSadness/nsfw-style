@@ -24,8 +24,10 @@ K/V каждого из 32 слоёв) в pageable RAM и возвращает K
 5. CUDA: `store` кладёт K/V на `cpu` (`c.k.device.type == "cpu"`), `get()` возвращает на `cuda`
    бит-в-бит (иначе `SKIP` — машина без GPU);
 6. строка `[kv] offload: …` печатается **один раз** на установку патча (второй `store` молчит);
-7. `_kv_cache_mode` (режим из `generation.sampler_kwargs.kv_cache`): умолчание `true`, `offload`,
-   `false` в bool/`"0"`/`"off"`, регистр, неизвестное значение → `ValueError` с `true|false|offload`.
+7. `_kv_cache_mode` (режим из `generation.kv_cache`): умолчание `auto-offload-ref2`, `offload`,
+   `false` в bool/`"0"`/`"off"`, регистр, неизвестное значение → `ValueError` с перечнем режимов;
+8. `_resolve_kv_cache`: `auto-offload-ref2` → `true` при одном референсе и `offload` при 2+,
+   остальные режимы возвращаются как есть; дефолт пресета `base` — тоже `auto-offload-ref2`.
 """
 from __future__ import annotations
 
@@ -42,7 +44,11 @@ if str(REPO_ROOT) not in sys.path:              # запуск из любого
     sys.path.insert(0, str(REPO_ROOT))
 sys.dont_write_bytecode = True                  # тест не должен оставлять __pycache__ в пакете
 
-from qwenstyle.backends.qwen_image21 import _kv_cache_mode      # noqa: E402
+from qwenstyle.backends.qwen_image21 import (                    # noqa: E402
+    KV_CACHE_MODES,
+    _kv_cache_mode,
+    _resolve_kv_cache,
+)
 from qwenstyle.backends.qwen_kv import (                        # noqa: E402
     LAYER_CACHE_CLASS,
     TRANSFORMER_MODULE,
@@ -96,9 +102,12 @@ def _patched(verbose: bool = False):
         uninstall()                                  # идемпотентно: кейс 4 зовёт его сам
 
 
-def _fake_cfg(sampler_kwargs: Any) -> Any:
-    """Минимальный RunConfig-подобный объект: бекенду нужен только `generation.sampler_kwargs`."""
-    return SimpleNamespace(generation=SimpleNamespace(sampler_kwargs=sampler_kwargs))
+def _fake_cfg(kv_cache: Any = None) -> Any:
+    """Минимальный RunConfig-подобный объект: бекенду нужно только `generation.kv_cache`."""
+    generation: Any = SimpleNamespace(sampler_kwargs={})
+    if kv_cache is not None:
+        generation.kv_cache = kv_cache
+    return SimpleNamespace(generation=generation)
 
 
 # --------------------------------------------------------------------------- #
@@ -238,33 +247,65 @@ def case_prints_once() -> None:
 
 
 def case_mode_from_config() -> None:
-    """7. `_kv_cache_mode`: умолчание `true`, три режима, алиасы, регистр, ошибка на мусоре."""
+    """7. `_kv_cache_mode`: умолчание `auto-offload-ref2`, режимы, алиасы, регистр, мусор."""
     expected: tuple[tuple[Any, str], ...] = (
-        ({}, "true"),
-        ({"kv_cache": "offload"}, "offload"),
-        ({"kv_cache": False}, "false"),
-        ({"kv_cache": True}, "true"),
-        ({"kv_cache": "0"}, "false"),
-        ({"kv_cache": "off"}, "false"),
-        ({"kv_cache": "OFFLOAD"}, "offload"),
-        ({"kv_cache": "  Offload "}, "offload"),
-        ({"kv_cache": "on"}, "true"),
+        (None, "auto-offload-ref2"),
+        ("offload", "offload"),
+        (False, "false"),
+        (True, "true"),
+        ("0", "false"),
+        ("off", "false"),
+        ("OFFLOAD", "offload"),
+        ("  Offload ", "offload"),
+        ("on", "true"),
+        ("auto", "auto-offload-ref2"),
+        ("Auto_Offload_Ref2", "auto-offload-ref2"),
     )
-    for kwargs, want in expected:
-        got = _kv_cache_mode(_fake_cfg(dict(kwargs)))
+    for raw, want in expected:
+        got = _kv_cache_mode(_fake_cfg(raw))
         if got != want:
-            raise AssertionError(f"sampler_kwargs={kwargs} -> {got!r}, ожидалось {want!r}")
-    print(f"  ok: {len(expected)} значений sampler_kwargs.kv_cache разобраны в true/false/offload")
+            raise AssertionError(f"generation.kv_cache={raw!r} -> {got!r}, ожидалось {want!r}")
+    print(f"  ok: {len(expected)} значений generation.kv_cache разобраны ({'|'.join(KV_CACHE_MODES)})")
 
     try:
-        _kv_cache_mode(_fake_cfg({"kv_cache": "bad"}))
+        _kv_cache_mode(_fake_cfg("bad"))
     except ValueError as exc:
         text = str(exc)
-        if "true|false|offload" not in text:
+        if "auto-offload-ref2|true|offload|false" not in text:
             raise AssertionError(f"ValueError без перечня режимов: {text!r}")
         print(f"  ok: неизвестное значение -> ValueError: {text}")
-        return
-    raise AssertionError("значение kv_cache=bad не отвергнуто (нужен ValueError)")
+    else:
+        raise AssertionError("значение kv_cache=bad не отвергнуто (нужен ValueError)")
+
+
+def case_auto_by_refs() -> None:
+    """8. `auto-offload-ref2`: 1 референс -> `true`, 2+ -> `offload`; остальные режимы — как есть."""
+    table = (
+        ("auto-offload-ref2", 0, "true"),
+        ("auto-offload-ref2", 1, "true"),
+        ("auto-offload-ref2", 2, "offload"),
+        ("auto-offload-ref2", 4, "offload"),
+        ("true", 3, "true"),
+        ("offload", 1, "offload"),
+        ("false", 4, "false"),
+    )
+    for mode, refs, want in table:
+        got = _resolve_kv_cache(mode, refs)
+        if got != want:
+            raise AssertionError(f"{mode!r} + {refs} рефов -> {got!r}, ожидалось {want!r}")
+    print(f"  ok: {len(table)} комбинаций auto-offload-ref2 разрешены по числу референсов")
+
+    # Умолчание пресета `base` — именно `auto-offload-ref2` (иначе 2+ рефа дают OOM).
+    from qwenstyle.config import RunConfig
+
+    cfg = RunConfig.from_profile("base")
+    if getattr(cfg.generation, "kv_cache", None) != "auto-offload-ref2":
+        raise AssertionError(f"base.kv_cache={getattr(cfg.generation, 'kv_cache', None)!r}, "
+                             "ожидалось 'auto-offload-ref2'")
+    resolved = _resolve_kv_cache(_kv_cache_mode(cfg), 2)
+    if resolved != "offload":
+        raise AssertionError(f"base + 2 рефа -> {resolved!r}, ожидалось 'offload'")
+    print("  ok: пресет base без --set даёт auto-offload-ref2 -> offload на 2 референсах")
 
 
 def main() -> int:
@@ -275,7 +316,8 @@ def main() -> int:
         ("4. install/uninstall идемпотентны, оригинал восстановлен", case_idempotent_and_restore),
         ("5. roundtrip cuda -> cpu -> cuda", case_roundtrip_cuda),
         ("6. строка [kv] offload печатается один раз", case_prints_once),
-        ("7. режим из sampler_kwargs.kv_cache", case_mode_from_config),
+        ("7. режим из generation.kv_cache", case_mode_from_config),
+        ("8. auto-offload-ref2 разрешается по числу референсов", case_auto_by_refs),
     )
     failed = 0
     for label, case in cases:
