@@ -79,7 +79,7 @@ from typing import Any, ClassVar
 
 from ..cache import Blob
 from ..registry import register_generation
-from .base import REPO_ROOT, Capabilities, ResourceBudget, hardware_budget_verdict
+from .base import REPO_ROOT, Capabilities, ParameterSpec, ResourceBudget, hardware_budget_verdict
 
 #: Репозиторий пайплайна (transformer + text-encoder + VAE + tokenizer). Веса НЕ скачаны.
 DEFAULT_REPO = "darknight9121/FLUX.2-klein-base-9B-bucket-uncensored"
@@ -671,6 +671,52 @@ class Flux2Backend:
                "на промт). `caption_upsample_temperature` у Flux2KleinPipeline отсутствует."),
     )
 
+    @staticmethod
+    def parameters() -> tuple[ParameterSpec, ...]:
+        """Настраиваемые параметры модели (шаг 9 плана публикации).
+
+        Кроме полей `GenerationConfig` (`steps`/`guidance`/`offload`/`precision`) модель читает
+        ключи `generation.sampler_kwargs`:
+
+        * `max_sequence_length`, `text_encoder_out_layers` — параметры энкодинга (входят в ключ
+          кэша `text_embeds`; `text_encoder_out_layers` по умолчанию берётся из `PIPELINE_SPECS`);
+        * `guidance_scale`/`caption_upsample_temperature` — аргументы `pipe(...)` (`extra_sampling`);
+        * `offload_blocks`/`offload_stream` — `enable_group_offload`;
+        * `rebuild_precision_cache`/`rebuild_fp8_cache` — пересборка fp8-кэша.
+        """
+        caps = Flux2Backend.caps
+        return (
+            ParameterSpec("steps", "generation", "int", 25, minimum=8, maximum=50,
+                          doc="шагов сэмплера (для klein 8 даёт черновик)"),
+            ParameterSpec("guidance", "generation", "float", DEFAULT_GUIDANCE, minimum=0.0,
+                          maximum=10.0,
+                          doc="guidance пайплайна; аргумент pipe(...) — sampler_kwargs.guidance_scale"),
+            ParameterSpec("offload", "generation", "enum", "none", choices=tuple(caps.offload),
+                          doc="none = веса в VRAM; group = блоки с CPU; model_cpu = целиком на CPU"),
+            ParameterSpec("precision", "generation", "enum", "fp8", choices=tuple(caps.precision),
+                          doc="fp8 = кэш cache/models/fp8_transformer_flux2; bf16 = 16.9 GiB в VRAM"),
+            ParameterSpec("max_sequence_length", "sampler", "int", DEFAULT_MAX_SEQUENCE_LENGTH,
+                          minimum=256, maximum=2048,
+                          doc="токенов промта; входит в ключ кэша text_embeds"),
+            ParameterSpec("text_encoder_out_layers", "sampler", "str", None,
+                          doc="слои энкодера через запятую (напр. 9,18,27); не задано = из "
+                              "PIPELINE_SPECS по model_index.json (Klein 9,18,27 / Flux2 10,20,30)"),
+            ParameterSpec("guidance_scale", "sampler", "float", DEFAULT_GUIDANCE, minimum=0.0,
+                          maximum=10.0, doc="аргумент pipe(...): дублирует guidance намеренно"),
+            ParameterSpec("caption_upsample_temperature", "sampler", "float", None,
+                          minimum=0.0, maximum=2.0,
+                          doc="upsample промта; есть только у Flux2Pipeline (Klein игнорирует), "
+                              "входит в ключ кэша"),
+            ParameterSpec("offload_blocks", "sampler", "int", 1, minimum=1, maximum=64,
+                          doc="блоков трансформера на GPU одновременно (offload=group)"),
+            ParameterSpec("offload_stream", "sampler", "bool", True,
+                          doc="асинхронная префетч-загрузка блоков (offload=group)"),
+            ParameterSpec("rebuild_precision_cache", "sampler", "bool", False,
+                          doc="пересобрать fp8-кэш вместо чтения готового"),
+            ParameterSpec("rebuild_fp8_cache", "sampler", "bool", False,
+                          doc="алиас rebuild_precision_cache (флаг --rebuild-fp8-cache)"),
+        )
+
     # -- загрузка ---------------------------------------------------------- #
 
     def prepare(self, cfg: Any, need_encoder: bool) -> Flux2Handle:
@@ -1058,6 +1104,6 @@ class Flux2Backend:
 
 
 __all__ = [
-    "CACHE_STAGE", "DEFAULT_PIPELINE", "DEFAULT_REPO", "PIPELINE_SPECS", "Flux2Backend",
-    "Flux2Handle",
+    "CACHE_STAGE", "DEFAULT_GUIDANCE", "DEFAULT_MAX_SEQUENCE_LENGTH", "DEFAULT_PIPELINE",
+    "DEFAULT_REPO", "PIPELINE_SPECS", "Flux2Backend", "Flux2Handle",
 ]

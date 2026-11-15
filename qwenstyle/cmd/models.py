@@ -1,7 +1,10 @@
 """`python -m qwenstyle models list|probe|download` — реестр бекендов и работа с репозиториями.
 
 * `models list` — что зарегистрировано (`qwenstyle/backends/*.py`), с ключевыми полями
-  `Capabilities`/`ResourceBudget` и секцией ошибок импорта. Пустой реестр — не ошибка.
+  `Capabilities`/`ResourceBudget`, счётчиком настраиваемых параметров (`parameters()` бекенда)
+  и секцией ошибок импорта. `--json` отдаёт те же параметры списком дескрипторов
+  (`name/scope/type/default/choices/minimum/maximum/readonly/doc`) — это источник для скриптов.
+  Пустой реестр — не ошибка.
 * `models probe <repo>` — читает `model_index.json` и `*/config.json` **без загрузки весов**:
   сначала из локального `hf-cache`, иначе (если сеть разрешена) через HuggingFace Hub. Печатает
   компоненты с размерами, найденный бекенд и вердикт по бюджету (`hardware_budget_verdict`).
@@ -38,9 +41,11 @@ from typing import Any
 from ..backends.base import (
     GIB,
     REPO_ROOT,
+    ParameterSpec,
     ResourceBudget,
     hardware_budget_verdict,
     hardware_resources,
+    params_or_empty,
 )
 from ..profiles import (
     PROFILE_ORDER,
@@ -99,10 +104,26 @@ def _budget_short(budget: ResourceBudget) -> str:
 # `models list`
 # --------------------------------------------------------------------------- #
 
+def _params(cls: type) -> tuple[ParameterSpec, ...]:
+    """Настраиваемые параметры бекенда (шаг 9): старый бекенд без `parameters()` даёт `()`."""
+    return params_or_empty(cls)
+
+
+def _params_cell(cls: type) -> str:
+    """Компактная колонка `models list`: `params=9`, `-` если бекенд ничего не объявил."""
+    count = len(_params(cls))
+    return f"params={count}" if count else "-"
+
+
+def _params_json(cls: type) -> list[dict[str, Any]]:
+    """`models list --json`: машинночитаемые дескрипторы (name/scope/type/default/range/readonly)."""
+    return [spec.to_dict() for spec in _params(cls)]
+
+
 def _list_rows(kind: str, table: dict[str, type]) -> tuple[list[str], list[list[str]]]:
     if kind == "generation":
         headers = ["имя", "conditioning", "image_inputs", "encoder", "precision", "offload",
-                   "steps", "lora", "бюджет (bf16/fp8, enc, диск)"]
+                   "steps", "lora", "params", "бюджет (bf16/fp8, enc, диск)"]
         rows = []
         for name in sorted(table):
             cls = table[name]
@@ -117,6 +138,7 @@ def _list_rows(kind: str, table: dict[str, type]) -> tuple[list[str], list[list[
                 "|".join(getattr(caps, "offload", ()) or ()) or "-",
                 "-" if getattr(caps, "fixed_steps", None) is None else str(caps.fixed_steps),
                 ("yes" if getattr(caps, "supports_lora", False) else "no") if caps else "-",
+                _params_cell(cls),
                 _budget_short(budget) if isinstance(budget, ResourceBudget) else "-",
             ])
         return headers, rows
@@ -125,14 +147,20 @@ def _list_rows(kind: str, table: dict[str, type]) -> tuple[list[str], list[list[
         return headers, [[name, getattr(table[name], "cache_tag", "-"),
                           "yes" if getattr(table[name], "requires_vision", False) else "no"]
                          for name in sorted(table)]
-    headers = ["имя"]
-    return headers, [[name] for name in sorted(table)]
+    headers = ["имя", "params"]
+    return headers, [[name, _params_cell(table[name])] for name in sorted(table)]
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
     registry = discover()
     if getattr(args, "json", False):
-        print(json.dumps(registry.to_dict(), ensure_ascii=False, indent=2))
+        payload = registry.to_dict()
+        # Настраиваемые параметры объявляют адаптеры (`parameters()` -> `ParameterSpec`):
+        # в JSON они нужны скриптам (`jq '.generation.qwen_image21.parameters'`).
+        for kind in KINDS:
+            for name, cls in registry.table(kind).items():
+                payload[kind][name]["parameters"] = _params_json(cls)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
     if registry.empty:
         print("зарегистрированных бекендов нет")

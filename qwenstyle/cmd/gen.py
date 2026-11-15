@@ -46,6 +46,7 @@ from ..config import (
     available_presets,
     load_prompt,
     prompt_md5,
+    readonly_params,
 )
 from ..profiles import PROFILE_ORDER, PROFILES
 from ..runlog import META_NAME
@@ -253,6 +254,7 @@ def build_config(args: argparse.Namespace, *, preset: str, prompt_file: Path,
     оставлять кадр от прошлого прогона.
     """
     overrides: dict[str, Any] = dict(parse_sets(getattr(args, "sets", None)))
+    user_sets = dict(overrides)                      # только то, что задал пользователь
     first_seed = int(seeds[0])
     overrides.update({
         "prompt_file": posix(prompt_file),
@@ -272,7 +274,12 @@ def build_config(args: argparse.Namespace, *, preset: str, prompt_file: Path,
         overrides["aspect"] = str(args.aspect)
     if getattr(args, "no_logs", False):
         overrides["logs"] = False
-    return RunConfig.from_profile(preset, **overrides)
+    cfg = RunConfig.from_profile(preset, **overrides)
+    # Параметры объявляет адаптер модели: если `--set` попал в readonly (например `steps` у H3,
+    # где расписание PDD задаёт ровно 6 шагов), предупреждаем, а не делаем вид, что применилось.
+    for spec in readonly_params(cfg, user_sets):
+        print(f"[gen] {spec.readonly_note()}, значение проигнорировано", flush=True)
+    return cfg
 
 
 def backend_caps(cfg: RunConfig) -> Any:

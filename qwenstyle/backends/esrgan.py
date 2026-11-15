@@ -7,7 +7,7 @@ Windows), тайловый инференс и автоскачивание ве
 
 * **тайлы 256 / pad >= 16 дают бит-в-бит тот же кадр, что прогон всего кадра** (`_tiled`);
 * x4 — родной масштаб сети; `factor` 2/1.5/… = прогнать x4 и уменьшить LANCZOS;
-* веса: `cache/weights/RealESRGAN_x4plus_anime_6B.pth` (17.9 МиБ, sha256 `f872d837…`), при
+* веса: `cache/models/weights/RealESRGAN_x4plus_anime_6B.pth` (17.9 МиБ, sha256 `f872d837…`), при
   отсутствии качаются из официального GitHub-релиза (сеть — только в этом случае);
 * `seed` не влияет на результат (сеть детерминирована) — параметр есть только ради общего
   контракта `UpscaleBackend`.
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from ..registry import register_upscale
-from .base import REPO_ROOT, ResourceBudget
+from .base import REPO_ROOT, ParameterSpec, ResourceBudget
 
 if TYPE_CHECKING:                                   # только типы: PIL/torch не тянем на импорте
     from PIL import Image
@@ -37,7 +37,8 @@ WEIGHT_URL = ("https://github.com/xinntao/Real-ESRGAN/releases/download/"
 #: sha256 файла весов (17.9 МиБ) — проверяется сразу после скачивания.
 WEIGHT_SHA256 = "f872d837d3c90ed2e05227bed711af5671a6fd1c9f7d7e91c911a61f155e99da"
 #: Путь по умолчанию относительно корня репозитория (а не cwd: в пакете `chdir` недопустим).
-DEFAULT_WEIGHTS = "cache/weights/RealESRGAN_x4plus_anime_6B.pth"
+#: Шаг 4 разделил кеши: веса и квантование живут в `cache/models/`, вычисления — в `cache/embeds/`.
+DEFAULT_WEIGHTS = "cache/models/weights/RealESRGAN_x4plus_anime_6B.pth"
 
 SCALE = 4                                           # родной масштаб сети
 NUM_BLOCK = 6                                       # anime_6B
@@ -260,8 +261,28 @@ class EsrganBackend:
     name: ClassVar[str] = "esrgan"
     budget: ClassVar[ResourceBudget] = ResourceBudget(
         weights_bf16_gib=0.02, disk_gib=0.02,
-        notes="Real-ESRGAN x4plus_anime_6B, 17.9 МиБ в cache/weights, тайлы 256/pad 32",
+        notes="Real-ESRGAN x4plus_anime_6B, 17.9 МиБ в cache/models/weights, тайлы 256/pad 32",
     )
+
+    @staticmethod
+    def parameters() -> tuple[ParameterSpec, ...]:
+        """Настраиваемые параметры апскейла (шаг 9 плана публикации).
+
+        Объявляет сам бекенд: `config show --explain-params` печатает из этого списка, а ядро
+        валидирует ими `--set` для `upscale.*` (поля `UpscaleConfig`).
+        """
+        return (
+            ParameterSpec("factor", "upscale", "float", 0.0, minimum=0.0, maximum=4.0,
+                          doc="множитель; 0 = выключено; target_height главнее factor"),
+            ParameterSpec("target_height", "upscale", "int", None, minimum=0,
+                          doc="целевая высота кадра: factor считается из неё (1440 для strong)"),
+            ParameterSpec("tile", "upscale", "int", DEFAULT_TILE, minimum=64, maximum=1024,
+                          doc="размер тайла (только esrgan; 256/pad 32 — бит-в-бит)"),
+            ParameterSpec("pad", "upscale", "int", DEFAULT_PAD, minimum=0, maximum=128,
+                          doc="перекрытие тайлов (только esrgan; при tile=128 нужен 32)"),
+            ParameterSpec("backend", "upscale", "enum", "esrgan", choices=("esrgan",),
+                          doc="бекенд постобработки (seedvr2 — вне публичных профилей)"),
+        )
 
     # -- контракт UpscaleBackend ------------------------------------------ #
 

@@ -83,7 +83,7 @@ from typing import Any, ClassVar
 
 from ..config import ConfigError
 from ..registry import RegistryError, get_encoder, register_generation
-from .base import GIB, REPO_ROOT, Capabilities, ResourceBudget, as_image_list
+from .base import GIB, REPO_ROOT, Capabilities, ParameterSpec, ResourceBudget, as_image_list
 
 #: Репозиторий пайплайна: `transformer_diffusers/`, `vae_diffusers/`, `pdd_*`, `processor/`,
 #: `tokenizer/`, `scheduler/`, `model_index.json`. Веса уже установлены в `hf-cache`.
@@ -655,6 +655,42 @@ class MiniMaxH3ImageBackend:
                "(`encoder.stream=true`, иначе в 63.6 GiB RAM вместе с активациями не влезает); "
                "VAE 2.2 GiB / 584M, 24 латентных канала; 6 шагов задаёт pdd_config.json"),
     )
+
+    @staticmethod
+    def parameters() -> tuple[ParameterSpec, ...]:
+        """Настраиваемые параметры модели (шаг 9 плана публикации).
+
+        `steps` объявлен `readonly`: расписание PDD (`pdd_config.json`) задаёт ровно 6 шагов и
+        сигмы, `num_inference_steps` пайплайн игнорирует — CLI предупреждает об этом, вместо того
+        чтобы молча принять `--set generation.steps=N`. `guidance` не объявлен вовсе: у H3 нет
+        guider'а и `negative_prompt`, CFG-ветки в пайплайне нет.
+        """
+        caps = MiniMaxH3ImageBackend.caps
+        return (
+            ParameterSpec("steps", "generation", "int", caps.fixed_steps, readonly=True,
+                          minimum=caps.fixed_steps, maximum=caps.fixed_steps,
+                          doc="PDD: 6 шагов и сигмы фиксированы pdd_config.json (--steps игнорируется)"),
+            ParameterSpec("offload", "generation", "enum", "group", choices=tuple(caps.offload),
+                          doc="group = блоки стримятся с CPU (fp8-веса 30.9 GiB в 16 GiB VRAM)"),
+            ParameterSpec("precision", "generation", "enum", "fp8", choices=tuple(caps.precision),
+                          doc="fp8 = кэш cache/models/fp8_transformer_h3_image (30.93 GiB)"),
+            ParameterSpec("max_images", "generation", "int", caps.max_images, readonly=True,
+                          doc="предел модели: столько референсов принимает edit "
+                              "(Capabilities.max_images)"),
+            ParameterSpec("offload_blocks", "sampler", "int", 1, minimum=1, maximum=64,
+                          doc="блоков трансформера на GPU одновременно (offload=group)"),
+            ParameterSpec("offload_stream", "sampler", "bool", True,
+                          doc="асинхронная префетч-загрузка блоков (offload=group)"),
+            ParameterSpec("offload_low_cpu_mem", "sampler", "bool", True,
+                          doc="экономный вариант group offload (меньше pinned-памяти)"),
+            ParameterSpec("min_generation_area", "sampler", "int", DEFAULT_MIN_GENERATION_AREA,
+                          minimum=256,
+                          doc="минимальная площадь кадра (px²), ниже которой размер поднимается"),
+            ParameterSpec("rebuild_precision_cache", "sampler", "bool", False,
+                          doc="пересобрать fp8-кэш вместо чтения готового (202.8 s каста)"),
+            ParameterSpec("rebuild_fp8_cache", "sampler", "bool", False,
+                          doc="алиас rebuild_precision_cache (флаг --rebuild-fp8-cache)"),
+        )
 
     # -- загрузка / размещение -------------------------------------------- #
 

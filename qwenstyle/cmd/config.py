@@ -2,6 +2,10 @@
 
 Ничего не загружает и не считает: чистый вывод RunConfig после применения `--set`,
 чтобы видеть, какие именно параметры (и какой ключ кэша) получит прогон.
+
+`--explain-params` печатает вместо этого таблицу настраиваемых параметров выбранных бекендов:
+её объявляют сами адаптеры моделей (`parameters()` -> `ParameterSpec`), поэтому ядро не хранит
+имён параметров моделей и не может с ними разойтись.
 """
 from __future__ import annotations
 
@@ -87,6 +91,49 @@ def describe(cfg: RunConfig) -> list[str]:
     return lines
 
 
+def _table(headers: list[str], rows: list[list[str]], indent: str = "  ") -> None:
+    """Таблица с выравниванием по колонкам (как `models list`, без внешних зависимостей)."""
+    widths = [max([len(str(h))] + [len(str(row[i])) for row in rows]) for i, h in enumerate(headers)]
+    for row in [headers] + rows:
+        line = "  ".join(str(cell).ljust(widths[i]) for i, cell in enumerate(row)).rstrip()
+        print(indent + line)
+
+
+def explain_params(cfg: RunConfig) -> None:
+    """Таблица `scope | name | type | default | range/choices | readonly | doc` по бекендам.
+
+    Источник — `parameters()` бекендов генерации и апскейла (`qwenstyle/backends/base.py`).
+    В конце каждой таблицы — готовые пути для `--set` (они же попадают в ошибку неизвестного
+    ключа `generation.sampler_kwargs.*`, см. `config.check_sampler_kwargs`).
+    """
+    from ..config import backend_parameters
+
+    headers = ["scope", "name", "type", "default", "range/choices", "readonly", "doc"]
+    pairs = (("generation", cfg.generation.backend), ("upscale", cfg.upscale.backend))
+    for kind, name in pairs:
+        specs = backend_parameters(kind, name)
+        title = "модель генерации" if kind == "generation" else "апскейл"
+        print(f"\n{title}: {name} — параметров {len(specs)}")
+        if not specs:
+            print("  (бекенд не объявил parameters(): настраиваемых параметров нет)")
+            continue
+        rows = [[
+            spec.scope,
+            spec.name,
+            spec.type,
+            spec.format_default(),
+            spec.range_text(),
+            "readonly" if spec.readonly else "-",
+            (spec.doc or "-")[:100] + ("…" if len(spec.doc or "") > 100 else ""),
+        ] for spec in specs]
+        _table(headers, rows)
+        settable = [spec.path for spec in specs if not spec.readonly]
+        fixed = [f"{spec.path}={spec.format_default()}" for spec in specs if spec.readonly]
+        print("  --set ключи: " + (", ".join(settable) or "—"))
+        if fixed:
+            print("  фиксировано моделью (readonly): " + ", ".join(fixed))
+
+
 def add_args(parser: argparse.ArgumentParser) -> None:
     actions = parser.add_subparsers(dest="config_action", required=True, metavar="<action>")
     show = actions.add_parser(
@@ -101,6 +148,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                       help="переопределить параметр, например generation.steps=8 или encoder.name=heretic "
                            "(можно повторять)")
     show.add_argument("--json", action="store_true", help="вывести конфиг как JSON (для скриптов)")
+    show.add_argument("--explain-params", dest="explain_params", action="store_true",
+                      help="таблица настраиваемых параметров бекендов (scope/name/type/default/"
+                           "range/readonly/doc) вместо конфига; источник — parameters()")
     show.set_defaults(_config_action="show")
 
 
@@ -112,6 +162,9 @@ def run(args: argparse.Namespace) -> int:
     from . import parse_sets
 
     cfg = RunConfig.from_profile(args.preset, **parse_sets(args.sets))
+    if getattr(args, "explain_params", False):
+        explain_params(cfg)
+        return 0
     if args.json:
         print(json.dumps(cfg.to_mapping(), ensure_ascii=False, indent=2))
         return 0
@@ -120,4 +173,4 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-__all__ = ["NAME", "HELP", "add_args", "run", "describe"]
+__all__ = ["NAME", "HELP", "add_args", "run", "describe", "explain_params"]

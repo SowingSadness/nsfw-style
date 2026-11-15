@@ -24,6 +24,9 @@ LoRA-тензоров (fp8 `addmm` не реализован), `enable_group_off
 * `offload_blocks` (по умолчанию 1) и `offload_stream` (1) — параметры `enable_group_offload`;
 * `rebuild_precision_cache` (он же `rebuild_fp8_cache`) — эквивалент `--rebuild-fp8-cache`
   из `run_style.py`: пересобрать fp8-кэш вместо чтения готового.
+
+Оба объявлены в `parameters()` вместе с `steps`/`guidance`/`offload`/`precision`/`max_images`:
+это единственный источник, по которому ядро проверяет `--set` и печатает `--explain-params`.
 """
 from __future__ import annotations
 
@@ -37,7 +40,7 @@ from typing import Any, ClassVar
 
 from ..config import encoder_device_canon
 from ..registry import register_generation
-from .base import REPO_ROOT, Capabilities, ResourceBudget, as_image_list
+from .base import REPO_ROOT, Capabilities, ParameterSpec, ResourceBudget, as_image_list
 
 #: Репозиторий пайплайна (text-encoder + VAE + processor + transformer).
 DEFAULT_REPO = "Qwen/Qwen-Image-2.1"
@@ -412,6 +415,43 @@ class QwenImage21Backend:
     )
     #: Репозитории, которые обслуживает бекенд (`models probe <repo>` -> `generation_for_repo`).
     repos: ClassVar[tuple[str, ...]] = (DEFAULT_REPO, TURBO_REPO)
+
+    @staticmethod
+    def parameters() -> tuple[ParameterSpec, ...]:
+        """Настраиваемые параметры модели (шаг 9 плана публикации).
+
+        Ядро этим списком валидирует `--set generation.sampler_kwargs.*` (неизвестный ключ —
+        ошибка), печатает `config show --explain-params` и считает `models list`. В списке обязаны
+        быть **все** ключи, которые бекенд читает сам: `offload_blocks`/`offload_stream`
+        (`_sampler_kwarg`) и `rebuild_precision_cache`/`rebuild_fp8_cache` (флаг
+        `--rebuild-fp8-cache`, читается `_rebuild_requested`).
+
+        `guidance`/`steps` у turbo-трансформера фиксированы расписанием `sample_sigmas` (8 шагов,
+        CFG-ветки нет), но в статике это не видно — предупреждение печатает `pipeline`, а не спека.
+        """
+        caps = QwenImage21Backend.caps
+        return (
+            ParameterSpec("steps", "generation", "int", 25, minimum=8, maximum=50,
+                          doc="шагов сэмплера; у turbo расписание фиксировано (8, sample_sigmas)"),
+            ParameterSpec("guidance", "generation", "float", 1.0, minimum=0.0, maximum=10.0,
+                          doc="true_cfg_scale; у turbo расписание фиксировано, отрицательный промт "
+                              "не используется"),
+            ParameterSpec("offload", "generation", "enum", "none", choices=tuple(caps.offload),
+                          doc="none = веса в VRAM; group = блоки стримятся с CPU (960p и выше)"),
+            ParameterSpec("precision", "generation", "enum", "fp8", choices=tuple(caps.precision),
+                          doc="fp8 = кэш cache/models/fp8_transformer*; bf16 = 14.2 GiB в VRAM"),
+            ParameterSpec("max_images", "generation", "int", caps.max_images, readonly=True,
+                          doc="предел модели: столько референсов принимает запрос "
+                              "(Capabilities.max_images)"),
+            ParameterSpec("offload_blocks", "sampler", "int", 1, minimum=1, maximum=64,
+                          doc="блоков трансформера на GPU одновременно (offload=group)"),
+            ParameterSpec("offload_stream", "sampler", "bool", True,
+                          doc="асинхронная префетч-загрузка блоков (offload=group)"),
+            ParameterSpec("rebuild_precision_cache", "sampler", "bool", False,
+                          doc="пересобрать fp8-кэш вместо чтения готового"),
+            ParameterSpec("rebuild_fp8_cache", "sampler", "bool", False,
+                          doc="алиас rebuild_precision_cache (флаг --rebuild-fp8-cache)"),
+        )
 
     # -- подготовка -------------------------------------------------------- #
 

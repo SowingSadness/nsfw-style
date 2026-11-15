@@ -16,7 +16,11 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
+
+# `ParameterSpec` — дескриптор настраиваемого параметра, объявленный адаптером модели
+# (`qwenstyle/backends/base.py`, шаг 9 плана публикации). Импорт лёгкий: base не тянет torch.
+from .backends.base import ParameterSpec, params_or_empty
 
 # `image_sha` живёт в `io.py` (хеш файла — это ввод/вывод, а не параметр конфига), но реэкспортируется
 # отсюда: `pipeline`/сайдкары исторически берут её из `qwenstyle.config`.
@@ -180,6 +184,86 @@ def _set_path(target: dict[str, Any], path: str, value: Any) -> None:
             raise ConfigError(f"--set {path}: '{key}' — не секция, туда нельзя вложить {keys[-1]}")
         node = child
     node[keys[-1]] = value
+
+
+# --------------------------------------------------------------------------- #
+# Параметры, объявленные адаптерами моделей
+# --------------------------------------------------------------------------- #
+
+def backend_parameters(kind: str, name: str) -> tuple[ParameterSpec, ...]:
+    """Параметры, объявленные бекендом (`parameters()`), без загрузки весов.
+
+    `kind` — `generation` | `upscale` | `encoder`. Незарегистрированный бекенд (модуль не
+    импортировался, опциональная зависимость отсутствует) и старый бекенд без `parameters()`
+    дают пустой кортеж: CLI продолжает работать, а валидация `--set` просто не срабатывает.
+    """
+    from .registry import get_encoder, get_generation, get_upscale
+
+    getter = {"generation": get_generation, "upscale": get_upscale,
+              "encoder": get_encoder}.get(str(kind))
+    if getter is None:
+        raise ConfigError(f"backend_parameters: неизвестный вид {kind!r}; "
+                          f"допустимо generation, upscale, encoder")
+    try:
+        cls = getter(str(name))
+    except Exception:                                   # noqa: BLE001 — нет бекенда/нет импорта
+        return ()
+    return params_or_empty(cls)
+
+
+def _spec_hint(spec: ParameterSpec) -> str:
+    """`generation.sampler_kwargs.offload_blocks (int, 1..64)` — для ошибки `--set`."""
+    details = [spec.type]
+    if spec.range_text() != "-":
+        details.append(spec.range_text())
+    if spec.readonly:
+        details.append("readonly")
+    return f"{spec.path} ({', '.join(details)})"
+
+
+def check_sampler_kwargs(backend: str, raw: Any) -> None:
+    """Проверить ключи `generation.sampler_kwargs` по спекам выбранного бекенда.
+
+    Раньше неизвестный ключ принимался молча (это `dict[str, Any]`) и просто игнорировался
+    бекендом. Теперь имена объявляет сам адаптер (`parameters()`, scope=`sampler`), а ядро
+    отбивает опечатку до загрузки весов, перечисляя доступные ключи именно этой модели.
+
+    Бекенд не зарегистрирован или ничего не объявил — проверять нечем, ключи принимаются
+    как раньше (иначе старые адаптеры перестали бы работать).
+    """
+    if not isinstance(raw, Mapping) or not raw:
+        return
+    specs = backend_parameters("generation", backend)
+    if not specs:
+        return
+    known = {spec.name: spec for spec in specs if spec.scope == "sampler"}
+    unknown = sorted(str(key) for key in raw if str(key) not in known)
+    if not unknown:
+        return
+    available = "; ".join(_spec_hint(spec) for spec in known.values()) or "—"
+    raise ConfigError(
+        f"generation.sampler_kwargs: бекенд {backend} не объявляет {', '.join(unknown)}; "
+        f"доступные ключи: {available}. Полная таблица: "
+        f"python -m qwenstyle config show <preset> --explain-params"
+    )
+
+
+def readonly_params(cfg: "RunConfig", paths: Iterable[str]) -> list[ParameterSpec]:
+    """Спеки, в которые попал `--set`/флаг, но значение фиксировано моделью.
+
+    Пример: `--set generation.steps=12` у `h3-image` (6 шагов PDD) или любой `max_images`.
+    CLI обязан предупредить («значение проигнорировано»), а не делать вид, что применилось.
+    """
+    touched = {str(path).strip() for path in paths or () if str(path or "").strip()}
+    if not touched:
+        return []
+    found: list[ParameterSpec] = []
+    pairs = (("generation", cfg.generation.backend), ("upscale", cfg.upscale.backend))
+    for kind, name in pairs:
+        for spec in backend_parameters(kind, name):
+            if spec.readonly and spec.path in touched:
+                found.append(spec)
+    return found
 
 
 # --------------------------------------------------------------------------- #
@@ -677,6 +761,10 @@ def _build_run_config(data: Mapping[str, Any], touched: set[str] | None = None) 
     data["generation"] = generation_raw
     data["encoder"] = encoder_raw
     data["upscale"] = upscale_raw
+    # Настраиваемые параметры моделей объявляет адаптер (`parameters()`), а не ядро: неизвестный
+    # ключ `generation.sampler_kwargs.*` — ошибка со списком доступных ключей этой модели.
+    check_sampler_kwargs(str(generation_raw.get("backend") or GenerationConfig.backend),
+                         generation_raw.get("sampler_kwargs"))
     # `--set input=…` (одиночный путь) — список выводится из него; `--set inputs=a,b` — наоборот.
     # Без этого `inputs`, унаследованный из пресета, молча перебил бы явно заданный `input`
     # (`RunConfig.__post_init__` считает `inputs` источником истины).
@@ -773,4 +861,5 @@ __all__ = [
     "encoder_dtype_canon", "EMBEDS_DIR", "MODELS_DIR", "CACHE_ROOT", "models_path",
     "LoraConfig", "NOREF_SHA", "RunConfig", "UpscaleConfig", "available_presets", "image_sha",
     "load_profile", "load_prompt", "preset_path", "prompt_md5",
+    "backend_parameters", "check_sampler_kwargs", "readonly_params",
 ]

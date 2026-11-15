@@ -35,7 +35,9 @@
 
 Три «модельных» ключа (`rebuild_fp8_cache`/`offload_blocks`/`offload_stream`) не про сэмплер,
 но в `RunConfig` они живут в `generation.sampler_kwargs` — так их читает бекенд
-`qwen_image21` (см. отчёт шага 4), и так они не попадают в ключ кэша эмбеддингов.
+`qwen_image21`, и так они не попадают в ключ кэша эмбеддингов. Объявлены эти ключи
+бекендом (`parameters()`), а не ядром: неизвестный `generation.sampler_kwargs.*` отбивается до
+загрузки весов, а таблица всех параметров — `config show <preset> --explain-params`.
 
 Новое (не было в `run_style.py`):
 
@@ -81,6 +83,7 @@ from ..config import (
     ConfigError,
     RunConfig,
     available_presets,
+    readonly_params,
 )
 from . import parse_sets
 
@@ -90,7 +93,7 @@ DEFAULT_CONFIG = "base"
 DEFAULT_OUT = "out/prison-school-style.png"
 DEFAULT_SEED = 20261113
 DEFAULT_LORA_SCALE = 0.7
-DEFAULT_WEIGHTS = "cache/weights/RealESRGAN_x4plus_anime_6B.pth"
+DEFAULT_WEIGHTS = "cache/models/weights/RealESRGAN_x4plus_anime_6B.pth"
 #: Адаптер базового профиля (FUSAL R80 под Qwen-Image-2.1): по нему и по трансформеру
 #: определяется «тот же самый base», а не отдельная модель.
 BASE_LORA = "fusal-qwen-image-2.1-v2-exact-r80.safetensors"
@@ -251,6 +254,10 @@ def build_config(args: argparse.Namespace) -> RunConfig:
         upscale = replace(upscale, color_fix="none")
     if generation is not cfg.generation or upscale is not cfg.upscale:
         cfg = replace(cfg, generation=generation, upscale=upscale)
+    # Параметры объявляет адаптер модели (`parameters()`): если флаг/`--set` попал в readonly
+    # (например `steps` у MiniMax-H3: расписание PDD задаёт 6 шагов), предупреждаем.
+    for spec in readonly_params(cfg, overrides):
+        print(f"[run] {spec.readonly_note()}, значение проигнорировано", flush=True)
     return cfg
 
 

@@ -8,7 +8,9 @@
 * бюджет ресурсов объявляет сам бекенд (`ResourceBudget`), а проверяет оркестратор/`models probe`
   через `hardware_budget_verdict()` — до скачивания весов;
 * conditioning (`precomputed`/`internal`) — единственный признак, по которому оркестратор решает,
-  кэшировать ли эмбеддинги `.pt` (Qwen-Image-2.1) или отдавать промт/референсы в пайплайн (FLUX.2).
+  кэшировать ли эмбеддинги `.pt` (Qwen-Image-2.1) или отдавать промт/референсы в пайплайн (FLUX.2);
+* настраиваемые параметры объявляет **адаптер модели** (`ParameterSpec`), а не ядро: `config show
+  --explain-params`, `models list` и валидация `--set` читают один и тот же список.
 """
 from __future__ import annotations
 
@@ -35,6 +37,10 @@ GIB = 1024 ** 3
 #: Корень репозитория: от него считаются `cache/`, `hf-cache/` и свободное место на диске.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+#: Где живёт параметр в `RunConfig`: `generation.steps` / `generation.sampler_kwargs.offload_blocks` /
+#: `encoder.dtype` / `upscale.tile`. Список закрытый — `ParameterSpec.path` выводит путь из scope.
+PARAMETER_SCOPES: tuple[str, ...] = ("generation", "sampler", "encoder", "upscale")
+
 
 # --------------------------------------------------------------------------- #
 # Дескрипторы возможностей и бюджета
@@ -46,6 +52,101 @@ def _fmt_gib(value: float | None) -> str:
 
 def _fmt_steps(value: int | None) -> str:
     return "-" if value is None else str(value)
+
+
+@dataclass(frozen=True)
+class ParameterSpec:
+    """Один настраиваемый параметр модели: дескриптор, а не хранение значения.
+
+    Объявляется адаптером (`GenerationBackend.parameters()`/`UpscaleBackend.parameters()`), поэтому
+    ядро не знает имён параметров моделей: `config show --explain-params` печатает таблицу из этих
+    дескрипторов, `models list --json` отдаёт их списком, а `--set` валидируется по ним же
+    (`qwenstyle/config.py`).
+
+    `scope` определяет путь в `RunConfig` (`path`):
+
+    * `generation` -> `generation.<name>` (реальные поля `GenerationConfig`: `steps`, `offload`, …);
+    * `sampler`    -> `generation.sampler_kwargs.<name>` (то, что бекенд читает `_sampler_kwarg`);
+    * `encoder`    -> `encoder.<name>`;
+    * `upscale`    -> `upscale.<name>`.
+
+    `readonly=True` — значение фиксировано моделью (например 6 шагов PDD у MiniMax-H3): CLI обязан
+    предупредить, что `--set` этого ключа проигнорирован, а не молча принять его.
+    """
+
+    name: str
+    scope: str
+    type: str                       # "int" | "float" | "bool" | "str" | "enum"
+    default: Any = None
+    choices: tuple[str, ...] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    readonly: bool = False
+    doc: str = ""
+
+    @property
+    def path(self) -> str:
+        """Путь для `--set`: `generation.sampler_kwargs.offload_blocks`, `upscale.tile`, …"""
+        if self.scope == "sampler":
+            return f"generation.sampler_kwargs.{self.name}"
+        return f"{self.scope}.{self.name}"
+
+    def range_text(self) -> str:
+        """Диапазон/перечисление для таблиц: `1..64`, `none|group`, `-`."""
+        if self.choices:
+            return "|".join(self.choices)
+        if self.minimum is not None and self.maximum is not None:
+            return f"{_fmt_num(self.minimum)}..{_fmt_num(self.maximum)}"
+        if self.minimum is not None:
+            return f">= {_fmt_num(self.minimum)}"
+        if self.maximum is not None:
+            return f"<= {_fmt_num(self.maximum)}"
+        return "-"
+
+    def format_default(self) -> str:
+        """Умолчание в одну строку: `25`, `1.0`, `true`, `-`."""
+        value = self.default
+        if value is None:
+            return "-"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return _fmt_num(value)
+        if isinstance(value, (list, tuple)):
+            return ",".join(str(item) for item in value)
+        return str(value)
+
+    def readonly_note(self) -> str:
+        """Строка предупреждения для `--set` readonly-ключа (CLI добавляет «значение проигнорировано»)."""
+        default = self.format_default()
+        if self.name == "steps" and default != "-":
+            return f"steps фиксированы расписанием ({default})"
+        return f"{self.name} readonly ({default})"
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-представление (`models list --json`); без tuple'ов, чтобы json.dumps не падал."""
+        return {
+            "name": self.name,
+            "scope": self.scope,
+            "path": self.path,
+            "type": self.type,
+            "default": _jsonable(self.default),
+            "choices": list(self.choices) if self.choices else None,
+            "minimum": self.minimum,
+            "maximum": self.maximum,
+            "readonly": self.readonly,
+            "doc": self.doc,
+        }
+
+
+def _fmt_num(value: float) -> str:
+    return f"{int(value)}" if float(value).is_integer() else f"{value:g}"
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -129,7 +230,20 @@ class ResourceBudget:
 # --------------------------------------------------------------------------- #
 
 class GenerationBackend(Protocol):
-    """Модель генерации. Регистрация: `@register_generation` в `qwenstyle/backends/<name>.py`."""
+    """Модель генерации. Регистрация: `@register_generation` в `qwenstyle/backends/<name>.py`.
+
+    Помимо `caps`/`budget` бекенд **обязан** объявить свои настраиваемые параметры:
+
+    ```python
+    @staticmethod
+    def parameters() -> tuple[ParameterSpec, ...]: ...
+    ```
+
+    Этим списком ядро валидирует `--set generation.sampler_kwargs.*` (неизвестный ключ — ошибка),
+    `config show --explain-params` печатает таблицу, а `models list` — счётчик. Ключи, которые
+    бекенд читает сам (`_sampler_kwarg`/`sampler_kwargs.get`), обязаны быть в списке — иначе
+    `--set` их отвергнет. Старые бекенды без `parameters()` не падают: `params_or_empty()`.
+    """
 
     name: ClassVar[str]
     caps: ClassVar[Capabilities]
@@ -165,6 +279,21 @@ class GenerationBackend(Protocol):
         """Диагностика без генерации: версии, размер весов, состояние fp8-кэша."""
 
 
+def params_or_empty(cls: type | None) -> tuple[ParameterSpec, ...]:
+    """`cls.parameters()` или `()`: старый бекенд без объявления не должен ронять CLI.
+
+    Заодно отбрасываются не-`ParameterSpec` элементы (опечатка в адаптере не ломает `models list`).
+    """
+    getter = getattr(cls, "parameters", None)
+    if not callable(getter):
+        return ()
+    try:
+        specs = tuple(getter())
+    except Exception:                                    # noqa: BLE001 — диагностика не падает
+        return ()
+    return tuple(spec for spec in specs if isinstance(spec, ParameterSpec))
+
+
 def as_image_list(value: Any) -> list[Any]:
     """`PIL | list[PIL] | tuple[PIL] | None` -> список референсов (пустой для `None`).
 
@@ -180,7 +309,11 @@ def as_image_list(value: Any) -> list[Any]:
 
 
 class UpscaleBackend(Protocol):
-    """Постобработка (ESRGAN/SeedVR2/…). Регистрация: `@register_upscale`."""
+    """Постобработка (ESRGAN/SeedVR2/…). Регистрация: `@register_upscale`.
+
+    `@staticmethod parameters() -> tuple[ParameterSpec, ...]` — тот же контракт, что у
+    `GenerationBackend`: `factor`/`tile`/`pad`/`target_height` объявляет сам бекенд апскейла.
+    """
 
     name: ClassVar[str]
 
@@ -322,6 +455,7 @@ def hardware_budget_verdict(budget: ResourceBudget, resources: Hardware | None =
 
 __all__ = [
     "Capabilities", "ConditioningMode", "EncoderBackend", "EncoderRole", "GIB", "GenerationBackend",
-    "Hardware", "ImageInputs", "REPO_ROOT", "ResourceBudget", "UpscaleBackend", "as_image_list",
-    "hardware_budget_verdict", "hardware_resources",
+    "Hardware", "ImageInputs", "PARAMETER_SCOPES", "ParameterSpec", "REPO_ROOT", "ResourceBudget",
+    "UpscaleBackend", "as_image_list", "hardware_budget_verdict", "hardware_resources",
+    "params_or_empty",
 ]
