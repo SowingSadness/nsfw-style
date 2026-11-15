@@ -742,7 +742,8 @@ class QwenImage21Backend:
         """Отпустить стриминговый энкодер после энкода: `text_encoder=None` + del + gc.
 
         Стриминговый энкодер держит в VRAM буферы и пустые параметры (веса приезжают на время
-        forward), а его `ShardedWeights` — открытые mmap шардов. После энкода он не нужен ни одному
+        forward), а его `ShardedWeights` — открытые дескрипторы шардов (чтение позиционное,
+        `seek + readinto`, шард целиком в память не тянется). После энкода он не нужен ни одному
         шагу сэмплера (эмбеддинги подменяются замыканием), поэтому место отдаётся трансформеру.
         """
         pipe = getattr(handle, "pipe", None)
@@ -753,7 +754,7 @@ class QwenImage21Backend:
         pipe.text_encoder = None
         weights = getattr(model, "_stream_weights", None)
         close = getattr(weights, "close", None)
-        if callable(close):                          # Windows: закрытые mmap не держат файл шардов
+        if callable(close):                          # Windows: закрытые дескрипторы не держат файл шардов
             try:
                 close()
             except Exception:                        # noqa: BLE001 — уборка не должна ронять прогон

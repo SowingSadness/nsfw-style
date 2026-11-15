@@ -17,15 +17,17 @@
 Второе действие — `bench encoder`: замер диск-стриминга текст-энкодера (`encoder.stream`, см.
 `qwenstyle/streaming.py`). Логики загрузки весов здесь тоже нет: `--stream 0|1` уходит в
 `streaming.load_text_encoder`, а команда только снимает память, печатает hidden states и умеет
-сохранять/сверять их (`--save`/`--compare`). Главная метрика — **uss** (приватная память): страницы
-mmap из `safe_open` попадают в rss и дают ложное «не помогло». Плечи конвейера
+сохранять/сверять их (`--save`/`--compare`). Главная метрика — **uss** (приватная память): веса
+читаются позиционно (`seek + readinto`, без маппинга файла), и страницы page cache в rss попадают,
+а в uss — нет, поэтому «rss не упал» ≠ «стриминг не помогает». Плечи конвейера
 (`--device/--prefetch/--no-pin/--lookahead`) печатаются строкой `StreamStats.summary()`
 (`[stream] read=… copy=… compute=… wait=… total=… ratio_wait=…`), пик VRAM — `peak_vram`.
 
 Третье действие — `bench io`: микробенчмарки плеч конвейера (NVMe -> RAM и RAM -> VRAM), чтобы
 вердикт «упёрлись в диск или в compute» опирался на числа, а не на оценки. NVMe читается
-`streaming.ShardedWeights` (mmap) два прохода подряд — первый (вероятно холодный) и второй (тёплый
-page cache); H2D копируется на GPU блоками `--chunk-mib` pinned vs pageable, время — по
+`streaming.ShardedWeights` (позиционный `seek + readinto`) два прохода подряд — первый (вероятно
+холодный) и второй (тёплый page cache); H2D копируется на GPU блоками `--chunk-mib` pinned vs
+pageable, время — по
 `torch.cuda.Event`. Своей логики загрузки весов здесь тоже нет.
 
 Запуск:
@@ -123,7 +125,8 @@ def _memory_now() -> dict[str, float | None]:
     """`rss`/`uss` процесса в GiB прямо сейчас (`memory_full_info`; без psutil — None).
 
     `uss` (unique set size ≈ приватная память) — главная метрика диск-стриминга: страницы
-    mmap-файлов попадают в rss, но не в uss, поэтому «rss не упал» ≠ «стриминг не помогает».
+    page cache (прочитанные с диска байты) попадают в rss, но не в uss, поэтому «rss не упал» ≠
+    «стриминг не помогает».
     """
     try:
         import psutil
@@ -802,7 +805,7 @@ def run_encoder(args: argparse.Namespace) -> int:
         weights = getattr(model, "_stream_weights", None)
         if weights is not None:
             try:
-                weights.close()                    # закрыть mmap-шарды; файлы на диске не трогаем
+                weights.close()                    # закрыть дескрипторы шардов; файлы на диске не трогаем
             except Exception:                      # noqa: BLE001 — закрытие не должно падать
                 pass
         del model
@@ -844,8 +847,9 @@ def run_encoder(args: argparse.Namespace) -> int:
 def _read_pass(weights: Any, names: list[str], target_bytes: int) -> tuple[int, float]:
     """Один проход чтения: тензоры в порядке файла, пока не набрано `target_bytes`.
 
-    `ShardedWeights.__getitem__` — это mmap + cast/clone (ровно то, что делает реальный стриминг),
-    поэтому замер включает и приведение dtype, а не только чтение страниц. Тензор сразу
+    `ShardedWeights.__getitem__` — это позиционное чтение (`seek + readinto`, без маппинга файла)
+    + cast/clone, ровно то, что делает реальный стриминг, поэтому замер включает и приведение
+    dtype, а не только чтение страниц. Тензор сразу
     отпускается: RAM держит один тензор, page cache растёт сам собой (сбросить его средствами
     Python на Windows нельзя — поэтому `run_io` печатает оба прохода).
     """
@@ -936,8 +940,9 @@ def _run_h2d(total_bytes: int, chunk: int) -> int:
 def run_io(args: argparse.Namespace) -> int:
     """Микробенчмарки плеч: NVMe -> RAM (два прохода) и RAM -> VRAM (pinned vs pageable).
 
-    Своей логики загрузки весов здесь нет: файл открывает `streaming.ShardedWeights` (mmap),
-    а копию на GPU делает torch. Нет CUDA — NVMe-часть всё равно измеряется, `h2d` печатает
+    Своей логики загрузки весов здесь нет: файл открывает `streaming.ShardedWeights` (позиционное
+    чтение `seek + readinto`), а копию на GPU делает torch. Нет CUDA — NVMe-часть всё равно
+    измеряется, `h2d` печатает
     "нет CUDA" и команда завершается кодом 0.
     """
     target = str(getattr(args, "local_dir", None) or getattr(args, "repo", None) or "")
@@ -976,7 +981,7 @@ def run_io(args: argparse.Namespace) -> int:
             cold_bytes, cold_s = _read_pass(weights, names, target_bytes)
             warm_bytes, warm_s = _read_pass(weights, names, target_bytes)
         finally:
-            weights.close()                    # mmap-шарды закрываются; файлы не трогаем
+            weights.close()                    # дескрипторы шардов закрываются; файлы не трогаем
         cold = _gbps(cold_bytes, cold_s)
         warm = _gbps(warm_bytes, warm_s)
         print(f"[nvme] проход 1 (вероятно холодный): {cold_bytes / GIB:.2f} GiB за {cold_s:.2f} s "
@@ -1041,7 +1046,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
         description="Грузит энкодер только через streaming.load_text_encoder: --stream 0 — "
                     "обычное from_pretrained, --stream 1 — meta-параметры + подгрузка весов "
                     "модуля с диска. Пик памяти снимает фоновый сэмплер (rss/uss); главная "
-                    "метрика — uss (страницы mmap в неё не попадают).",
+                    "метрика — uss (страницы page cache в неё не попадают).",
         prog=f"{parser.prog} encoder",
     )
     encoder.add_argument("--repo", default=None, metavar="ID",
@@ -1080,8 +1085,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     io = actions.add_parser(
         "io",
         help="микробенчмарки плеч: NVMe -> RAM (два прохода) и RAM -> VRAM (pinned vs pageable)",
-        description="Читает N GiB весов с диска через streaming.ShardedWeights (mmap) два прохода "
-                    "подряд (первый — вероятно холодный, второй — тёплый page cache) и копирует "
+        description="Читает N GiB весов с диска через streaming.ShardedWeights (позиционный "
+                    "seek + readinto) два прохода подряд (первый — вероятно холодный, второй — "
+                    "тёплый page cache) и копирует "
                     "M GiB на GPU блоками --chunk-mib, замеряя pinned/pageable по "
                     "torch.cuda.Event. Без CUDA NVMe-часть всё равно измеряется, а h2d "
                     "печатает «нет CUDA»; код возврата 0.",

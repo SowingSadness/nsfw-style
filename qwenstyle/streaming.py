@@ -7,12 +7,14 @@
 1. модель собирается на `meta`-параметрах (`accelerate.init_empty_weights(include_buffers=False)`);
    буферы при этом **настоящие** (у Qwen3 `rotary_emb.inv_freq` считается в `__init__` и обязан жить);
 2. на каждый модуль с параметрами прямого владения (`named_parameters(recurse=False)`) вешается пара
-   хуков: pre-forward читает веса модуля из `safetensors` (mmap, `safe_open`), post-forward снимает
-   хранилище (см. `_free_parameter`) — файл остаётся замапленным, RAM освобождается;
+   хуков: pre-forward читает веса модуля позиционно с диска (`seek + readinto`, `qwenstyle/shards.py`),
+   post-forward снимает хранилище (см. `_free_parameter`) — RAM освобождается, а дескриптор шарда
+   остаётся открытым до `close()`;
    `load_text_encoder(stream=True)` дополнительно избавляет модель от meta-параметров, чтобы
    `model.device`/`get_module_execution_device()` отдавали `cpu`, а не `meta` (B1-bis);
 3. `ShardedWeights` — ленивая карта `имя -> тензор`: `keys()`/`__contains__` не читают данные,
-   `__getitem__` читает один тензор и кастит его в `StreamSource.dtype`.
+   `__getitem__` читает один тензор и кастит его в `StreamSource.dtype`, а `read_into` отдаёт байты
+   тензора прямо в pinned-буфер конвейера (без промежуточной копии в pageable RAM).
 
 Инвариант, ради которого всё написано: **это раскладка памяти, а не другая математика.** Тот же файл
 с теми же dtype даёт бит-в-бит те же активации, поэтому `encoder.stream` не входит в ключ кэша
@@ -24,9 +26,10 @@
 как это делает accelerate в `accelerate/utils/modeling.py::set_module_tensor_to_device`, на котором
 стоит штатный `AlignDevicesHook(offload=True)`.
 
-Тяжёлые зависимости (`torch`/`safetensors`/`accelerate`/`transformers`) импортируются **лениво**,
-внутри функций: модуль обязан импортироваться без torch (как `backends/encoders.py`, который
-`registry.discover()` импортирует ради `models list`).
+Тяжёлые зависимости (`torch`/`accelerate`/`transformers`) импортируются **лениво**, внутри функций:
+модуль обязан импортироваться без torch (как `backends/encoders.py`, который `registry.discover()`
+импортирует ради `models list`). `safetensors` в этом модуле не используется вовсе: заголовки шардов
+и байты тензоров читает `qwenstyle/shards.py` (`open` + `seek` + `readinto`).
 
 Сознательные ограничения:
 
@@ -34,8 +37,9 @@
   сломало бы `lm_head`; такой конфиг отвергается `ValueError` до сборки;
 * буферы не стримятся и не освобождаются: они малы и посчитаны из конфига;
 * карта `ShardedWeights` рассчитана на чтение из одного потока за раз (форвард: либо consumer,
-  либо поток-продюсер конвейера — одновременно они её не трогают); кэша прочитанных тензоров
-  нет — повторное чтение того же имени снова читает файл (в этом и смысл: RAM не растёт);
+  либо поток-продюсер конвейера — одновременно они её не трогают); сам слой чтения потокобезопасен
+  (замок на `seek + readinto` в `qwenstyle/shards.py`), но кэша прочитанных тензоров нет — повторное
+  чтение того же имени снова читает файл (в этом и смысл: RAM не растёт);
 * post-forward хук регистрируется с `always_call=True`, поэтому освобождает веса модуля **и тогда,
   когда forward бросил исключение** (веса не остаются в RAM до конца процесса). Единственная
   лазейка — падение самого pre-хука (например, шард/имя исчезли между проверкой и чтением):
@@ -68,6 +72,8 @@ from dataclasses import dataclass, field, replace
 from functools import partial, wraps
 from pathlib import Path
 from typing import Any, Callable
+
+from .shards import ShardSet, TensorInfo
 
 __all__ = [
     "ShardedWeights",
@@ -340,17 +346,28 @@ def resolve_stream_source(target: str | Path, *, subfolder: str | None = None,
 # --------------------------------------------------------------------------- #
 
 class ShardedWeights(Mapping[str, Any]):
-    """`имя -> Tensor` поверх шардов safetensors (`safe_open`, mmap), без загрузки файла целиком.
+    """`имя -> Tensor` поверх шардов safetensors: позиционное чтение, без загрузки файла целиком.
+
+    Чтение делает `qwenstyle/shards.py`: заголовок шарда разбирается один раз в память, а байты
+    тензора читаются по абсолютному смещению (`seek + readinto` под замком) — ровно столько,
+    сколько занимает тензор, без загрузки файла целиком и без списания шарда в commit (D10).
 
     * `keys()`/`__contains__`/`len()` — по заголовкам шардов, данные не читаются;
     * `__getitem__` читает **один** тензор и кастит его в `dtype` источника; кэша нет, поэтому
       повторное чтение (следующий forward) снова берёт байты с диска;
-    * `close()` закрывает файлы (`safe_open` не имеет `close()`, только `__exit__`); после закрытия
-      имена и размеры остаются доступны, а `__getitem__` даёт `RuntimeError`.
+    * `read_into` читает байты тензора **прямо в готовый буфер** (pinned-стейдж конвейера): одна
+      копия из page cache вместо «читать в pageable-тензор -> копировать в pinned»;
+    * `info()` — `TensorInfo` (файл, смещение, dtype, форма) без чтения данных;
+    * `close()` закрывает дескрипторы шардов (`ShardSet.close()`); после закрытия имена, формы и
+      `file_dtype()` остаются доступны, а чтение даёт `RuntimeError`.
 
-    Потокобезопасность не гарантируется: карта рассчитана на одно чтение за раз (consumer или
-    поток-продюсер конвейера, но не оба одновременно). Ошибка в имени -> `KeyError` с примерами.
+    Потокобезопасность: замок на `seek + readinto` живёт в `ShardFile`, поэтому карта безопасна
+    для чтения из разных потоков, но фактически читает один за раз (consumer или поток-продюсер
+    конвейера, не оба одновременно). Ошибка в имени -> `KeyError` с примерами.
     """
+
+    #: Текст ошибки чтения после `close()` — прежний, на него опираются тесты.
+    _CLOSED_MESSAGE = "streaming: ShardedWeights уже закрыт (close()) — веса больше не читаются"
 
     def __init__(self, source: StreamSource) -> None:
         if not source.shards:
@@ -359,9 +376,8 @@ class ShardedWeights(Mapping[str, Any]):
         self.shards: tuple[Path, ...] = tuple(Path(p) for p in source.shards)
         self._weight_map = dict(source.weight_map) if source.weight_map else None
         self._dtype = _dtype_name(source.dtype)
-        self._paths_by_name = {p.name: p for p in self.shards}
-        self._handles: dict[Path, Any] = {}
-        self._keys_by_path: dict[Path, tuple[str, ...]] = {}
+        # Заголовки всех шардов разбираются здесь (`ShardSet.__init__`), данные — по требованию.
+        self._set = ShardSet(self.shards, self._weight_map)
         self._lock = threading.Lock()
         self._closed = False
         # N12: dtype читается из заголовков шардов один раз на инстанс (400-750 имён иначе
@@ -369,7 +385,7 @@ class ShardedWeights(Mapping[str, Any]):
         self._dtype_cache: dict[str, str | None] = {}
         self._file_dtype_cache: str | None = None
         self._file_dtype_known = False
-        self._names = self._collect_keys()
+        self._names = tuple(self._set)
         self._name_set = frozenset(self._names)
 
     # -- интроспекция ------------------------------------------------------ #
@@ -403,8 +419,9 @@ class ShardedWeights(Mapping[str, Any]):
             self._file_dtype_known = True
             return None
         seen: dict[str | None, str] = {}          # dtype -> первое имя с этим dtype
+        file_dtypes = self._set.file_dtypes()     # имя -> dtype файла ("BF16"), только заголовки
         for item in self._names:
-            seen.setdefault(self._tensor_dtype(item), item)
+            seen.setdefault(_dtype_name(file_dtypes[item]), item)
         if len(seen) > 1:
             shown = ", ".join(f"{dtype or '<неизвестно>'} (например {item!r})"
                               for dtype, item in seen.items())
@@ -424,8 +441,8 @@ class ShardedWeights(Mapping[str, Any]):
             raise KeyError(self._unknown_message(name))
         if name in self._dtype_cache:
             return self._dtype_cache[name]
-        # `PySafeSlice.get_dtype()` -> "F16"/"BF16"/"F32"; `_dtype_name` знает эти алиасы
-        dtype = _dtype_name(self._open(self._path_for(name)).get_slice(name).get_dtype())
+        # `TensorInfo.file_dtype` — имя из заголовка ("BF16"); `_dtype_name` знает эти алиасы
+        dtype = _dtype_name(self._set.info(name).file_dtype)
         self._dtype_cache[name] = dtype
         return dtype
 
@@ -446,42 +463,39 @@ class ShardedWeights(Mapping[str, Any]):
         return isinstance(name, str) and name in self._name_set
 
     def __getitem__(self, name: str) -> Any:
-        if not isinstance(name, str):
-            raise KeyError(f"streaming: имя тензора должно быть строкой, получено {type(name).__name__}")
-        if name not in self._name_set:
-            raise KeyError(self._unknown_message(name))
-        handle = self._open(self._path_for(name))
-        # `safe_open.get_tensor` отдаёт **zero-copy view в mmap** (выравнивание по смещению
-        # в файле, часто 8 байт), а `from_pretrained` материализует веса копией в память torch
-        # (>=16 байт). Для CPU-GEMM это разные SIMD-пути: 8-байтово выровненный указатель даёт
-        # расхождение в 1 ulp (проверено на мульти-шардовом файле). Поэтому копируем всегда:
-        # результат обязан совпадать с обычной загрузкой **бит-в-бит**, а не «почти».
-        tensor = handle.get_tensor(name)
-        target = None
-        if self._dtype is not None:
-            torch = _torch()
-            target = getattr(torch, self._dtype, None)
-            if target is None:
-                raise ValueError(f"streaming: неизвестный dtype {self._dtype!r} "
-                                 f"в источнике {self.source.summary()}")
+        """Прочитать один тензор (с кастом в `dtype` источника, если он задан)."""
+        self._check_name(name)
+        tensor = self._read(name)
+        target = self._target_dtype()
         if target is not None and tensor.dtype != target:
-            tensor = tensor.to(target)           # новый буфер torch (выровнен как у from_pretrained)
-        else:
-            tensor = tensor.clone()
+            tensor = tensor.to(target)
+        # `clone` для выравнивания больше не нужен: `torch.empty` в `shards.read()` уже выровнен
+        # (>= 64 байт), поэтому раскладка та же, что у `from_pretrained` (бит-в-бит).
         return tensor
+
+    def info(self, name: str) -> TensorInfo:
+        """Описание тензора (файл, смещение, dtype, форма) — без чтения данных."""
+        self._check_name(name)
+        return self._set.info(name)
+
+    def read_into(self, name: str, view: Any, *, at: int = 0) -> int:
+        """Прочитать байты тензора **прямо в буфер** `view` (pinned-стейдж конвейера).
+
+        Возвращает число прочитанных байт (`info(name).nbytes`). Каст тут не делается: байты
+        кладутся как в файле, поэтому прямой путь конвейера допустим только при совпадении
+        `dtype` источника с dtype файла (иначе — обычный `__getitem__` + `take`).
+        """
+        self._check_name(name)
+        self._ensure_open()
+        return self._set.read_into(name, view, at=at)
 
     # -- закрытие ---------------------------------------------------------- #
 
     def close(self) -> None:
-        """Закрыть все открытые файлы шардов (идемпотентно)."""
+        """Закрыть дескрипторы всех шардов (идемпотентно; заголовки остаются в памяти)."""
         with self._lock:
             self._closed = True
-            handles, self._handles = self._handles, {}
-        for handle in handles.values():
-            try:
-                handle.__exit__(None, None, None)  # у safe_open нет close(), есть контекст
-            except Exception:                      # noqa: BLE001 — уже закрыт/битый дескриптор
-                pass
+            self._set.close()
 
     # -- внутреннее -------------------------------------------------------- #
 
@@ -498,46 +512,32 @@ class ShardedWeights(Mapping[str, Any]):
                 f"({len(self._names)} тензоров). Примеры имён: {shown}"
                 f"{' …' if len(self._names) > 5 else ''}")
 
-    def _collect_keys(self) -> tuple[str, ...]:
-        order: list[str] = []
-        seen: set[str] = set()
-        for path in self.shards:
-            names = tuple(self._open(path).keys())
-            self._keys_by_path[path] = names
-            for item in names:
-                if item not in seen:
-                    seen.add(item)
-                    order.append(item)
-        return tuple(order)
+    def _check_name(self, name: object) -> None:
+        """Имя обязано быть строкой и быть в наборе (иначе `KeyError` с примерами)."""
+        if not isinstance(name, str):
+            raise KeyError(f"streaming: имя тензора должно быть строкой, получено {type(name).__name__}")
+        if name not in self._name_set:
+            raise KeyError(self._unknown_message(name))
 
-    def _open(self, path: Path) -> Any:
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("streaming: ShardedWeights уже закрыт (close()) — веса больше не читаются")
-            handle = self._handles.get(path)
-            if handle is None:
-                from safetensors import safe_open   # лениво: импорт модуля без safetensors
+    def _ensure_open(self) -> None:
+        """Чтение после `close()` — `RuntimeError` с прежним текстом."""
+        if self._closed:
+            raise RuntimeError(self._CLOSED_MESSAGE)
 
-                handle = safe_open(str(path), framework="pt", device="cpu")
-                self._handles[path] = handle
-            return handle
+    def _read(self, name: str) -> Any:
+        """Прочитать тензор через `ShardSet` (каста нет — его делает `__getitem__`)."""
+        self._ensure_open()
+        return self._set.read(name)
 
-    def _path_for(self, name: str) -> Path:
-        if self._weight_map is not None:
-            shard = self._weight_map.get(name)
-            if shard is None:
-                raise KeyError(self._unknown_message(name))
-            path = self._paths_by_name.get(Path(shard).name)
-            if path is None:
-                raise KeyError(f"streaming: шард {shard!r} для тензора {name!r} не найден среди "
-                               f"{[p.name for p in self.shards]}")
-            return path
-        if len(self.shards) == 1:
-            return self.shards[0]
-        for path in self.shards:
-            if name in self._keys_by_path[path]:
-                return path
-        raise KeyError(self._unknown_message(name))
+    def _target_dtype(self) -> Any:
+        """Целевой dtype torch из `StreamSource.dtype`; None — как в файле."""
+        if self._dtype is None:
+            return None
+        target = getattr(_torch(), self._dtype, None)
+        if target is None:
+            raise ValueError(f"streaming: неизвестный dtype {self._dtype!r} "
+                             f"в источнике {self.source.summary()}")
+        return target
 
 
 # --------------------------------------------------------------------------- #
@@ -585,10 +585,13 @@ class StreamStats:
 
     Все времена — секунды стены, накапливаются по всем `forward()` модели. Плечи:
 
-    * `t_read`  — `ShardedWeights` -> RAM (mmap + cast/clone); в синхронном режиме его платит сам
-      consumer, в конвейере — фоновый поток (а consumer ждёт на очереди продюсера; это ожидание
-      **не** попадает в `t_wait`, см. ниже);
-    * `t_pin`   — копия в pinned-буфер RAM (только `cuda` при `pin_memory=True`);
+    * `t_read`  — `ShardedWeights` -> RAM (позиционное чтение с диска, `seek + readinto`, плюс каст
+      dtype если он задан); в синхронном режиме его платит сам consumer, в конвейере — фоновый
+      поток (а consumer ждёт на очереди продюсера; это ожидание **не** попадает в `t_wait`, см.
+      ниже); при `pin_memory=True` байты читаются сразу в pinned-буфер, и `t_read` включает эту
+      запись (отдельной копии `t_pin` тогда нет);
+    * `t_pin`   — копия в pinned-буфер RAM (только `cuda` при `pin_memory=True`; на прямом пути
+      «`read_into` в pinned-буфер» её нет, там пишет диск);
     * `t_copy`  — **выдача** асинхронной копии H2D (не ожидание её завершения);
     * `t_compute` — forward модулей, стена от pre-хука до post-хука;
     * `t_wait`  — только ожидание `Event` уже выданной копии на compute-стриме
@@ -641,12 +644,16 @@ class _PinnedPool:
     десятки гигабайт pinned-памяти. Поэтому буферы нумеруются по dtype и переиспользуются по
     ёмкости: берём самый маленький подходящий, а когда копия H2D завершилась — возвращаем обратно.
 
+    Два входа: `take(tensor)` — тензор уже прочитан в pageable-память, нужна копия в pinned;
+    `reserve(nbytes)` — вес ещё не читался, и диск пишется **прямо в pinned-буфер**
+    (`ShardFile.read_into`), без промежуточной pageable-копии.
+
     Если pinned-память выделить не удалось (Windows/WDDM, свободная VRAM кончилась — см.
     `_allocate`), пул **выключается навсегда для этой сессии** и стриминг идёт из обычной RAM.
     Обратно не включаемся: гарантия — один сбой на прогон, а не предупреждение на каждый слой.
 
-    Потокобезопасность: `take` зовёт продюсер, `give` — consumer (в `_sweep`/`stop`), поэтому
-    обе операции под замком.
+    Потокобезопасность: `take`/`reserve` зовёт продюсер, `give` — consumer (в `_sweep`/`stop`),
+    поэтому все операции под замком.
     """
 
     def __init__(self, enabled: bool) -> None:
@@ -684,6 +691,41 @@ class _PinnedPool:
         view.copy_(tensor)                       # в продюсере: параллельно с compute на GPU
         return view, buffer
 
+    def reserve(self, nbytes: int) -> tuple[Any, Any] | None:
+        """`nbytes` байт pinned-памяти -> `(uint8-view, буфер)`; `None` — пинить некуда/не вышло.
+
+        В отличие от `take`, тензора ещё нет: буфер отдаётся под позиционное чтение с диска
+        (`ShardFile.read_into`), поэтому получатель — пара из **view длины `nbytes`** (в него
+        пишет диск; `buffer[:nbytes]` разделяет хранилище с буфером) и **самого буфера** (его
+        возвращают в `give`). Best-fit по байтам среди свободных uint8-буферов, иначе новая
+        pinned-аллокация. Неудача — та же деградация, что в `take` (две строки `[stream]`,
+        `enabled=False`, `fallback=True`, `bytes=0`), и `None`: вызывающий идёт обычным путём.
+        """
+        if not self.enabled:
+            return None
+        nbytes = int(nbytes)
+        if nbytes <= 0:                          # pragma: no cover — вырожденный тензор
+            return None
+        torch = _torch()
+        key = str(torch.uint8)                   # тот же ключ, что у `give` (str(buffer.dtype))
+        with self._lock:
+            bucket = self._free.get(key) or []
+            buffer = None
+            best = None
+            # Best-fit, а не first-fit: та же логика, что в `take` — мелкий тензор не должен
+            # занимать большой буфер и заставлять пул расти.
+            for index, candidate in enumerate(bucket):
+                if candidate.numel() >= nbytes and (best is None or candidate.numel() < best[0]):
+                    best = (candidate.numel(), index)
+            if best is not None:
+                buffer = bucket.pop(best[1])
+            if buffer is None:
+                buffer = self._allocate(nbytes, torch.uint8, 1)
+                if buffer is None:               # pinned недоступен: читаем в pageable RAM
+                    return None
+                self.bytes += buffer.numel() * buffer.element_size()
+        return buffer[:nbytes], buffer
+
     def _allocate(self, numel: int, dtype: Any, element_size: int) -> Any | None:
         """`torch.empty(..., pin_memory=True)`; `None` = pinned недоступен, работаем без него.
 
@@ -700,7 +742,8 @@ class _PinnedPool:
         try:
             return torch.empty(numel, dtype=dtype, pin_memory=True)
         except (RuntimeError, MemoryError) as exc:
-            # Вызывается под `self._lock` (из `take`): замок здесь не берём — он не реентрантный.
+            # Вызывается под `self._lock` (из `take`/`reserve`): замок здесь не берём — он не
+            # реентрантный.
             self.enabled = False
             self.fallback = True
             self._free.clear()
@@ -949,9 +992,20 @@ class _StreamSession:
             return
 
     def _load(self, index: int) -> list[tuple[str, str, Any, Any]]:
-        """Прочитать тензоры слоя (в продюсере) и при `pin_memory` переложить в pinned-буфер."""
+        """Прочитать тензоры слоя (в продюсере); при `pin_memory` — прямо в pinned-буфер.
+
+        Если каст не нужен (`dtype` источника совпадает с dtype файла), байты читаются сразу в
+        pinned-буфер пула (`read_into`), без промежуточного pageable-тензора. Если нужен каст
+        (например `--set encoder.dtype=float32` на bf16-файлах) — прежний путь: `__getitem__`
+        кастует, `take` копирует уже правильный тензор (в pinned-буфер чужой dtype не попадёт).
+        """
         data: list[tuple[str, str, Any, Any]] = []
         for local, full in self._stages[index]:
+            prepared = self._load_pinned(full) if self._pin else None
+            if prepared is not None:
+                host, buffer = prepared
+                data.append((local, full, host, buffer))
+                continue
             started = time.perf_counter()
             tensor = self._weights[full]
             self._note_read(tensor, time.perf_counter() - started)
@@ -965,6 +1019,36 @@ class _StreamSession:
             self._add("t_pin", time.perf_counter() - started)
             data.append((local, full, host, buffer))
         return data
+
+    def _load_pinned(self, full: str) -> tuple[Any, Any] | None:
+        """Прочитать вес **прямо в pinned-буфер** -> `(host, buffer)`; `None` — общий путь.
+
+        `None` возвращается, когда прямой путь неприменим: нужен каст dtype (тогда в буфер легли бы
+        байты файлового dtype) или пул деградировал до pageable RAM. Счётчики те же, что на общем
+        пути: `t_read` — чтение с диска (включая запись в pinned-буфер), отдельного `t_pin` нет —
+        второй копии тоже нет.
+        """
+        weights = self._weights
+        info = weights.info(full)
+        target = weights.dtype
+        if target is not None and target != info.dtype:
+            return None                          # каст сделает `__getitem__`, потом `take`
+        got = self._pool.reserve(info.nbytes)
+        if got is None:                          # пул выключен/деградировал: читаем в pageable RAM
+            return None
+        host_u8, buffer = got
+        started = time.perf_counter()
+        try:
+            weights.read_into(full, memoryview(host_u8.numpy()))
+        except BaseException:                    # буфер не теряем: пул считает его занятым
+            self._pool.give([buffer])
+            raise
+        # `view`, а не копия: байты уже лежат в pinned-памяти, а аллокация torch выровнена
+        host = host_u8.view(getattr(_torch(), info.dtype)).view(info.shape)
+        self._note_read(host, time.perf_counter() - started)
+        if self._on_load is not None:
+            self._on_load(full, host)
+        return host, buffer
 
     def _request(self, index: int) -> None:
         """Попросить продюсера прочитать слои `index..index+ahead` (в возрастающем порядке)."""
@@ -1415,8 +1499,8 @@ def load_text_encoder(model_cls: Any, target: str | Path, *, subfolder: str | No
     Другие устройства отвергаются `ValueError` до чтения шардов. CPU-путь от этих флагов не зависит
     (результат бит-в-бит тот же — это раскладка памяти, а не математика).
 
-    Если после `resolve_stream_source` что-то падает, mmap-файлы шардов закрываются
-    (`ShardedWeights.close()`), чтобы дескрипторы не пережили исключение.
+    Если после `resolve_stream_source` что-то падает, дескрипторы шардов закрываются
+    (`ShardedWeights.close()`), чтобы они не пережили исключение.
 
     Замена `meta` -> пустой параметр делается **здесь**, а не в `build_streamed`, сознательно:
     `build_streamed` — низкоуровневый сборщик, его контракт («все параметры на `meta`») закреплён
@@ -1455,8 +1539,8 @@ def load_text_encoder(model_cls: Any, target: str | Path, *, subfolder: str | No
     config = AutoConfig.from_pretrained(str(config_dir), local_files_only=True)
     weights = ShardedWeights(source)
     try:
-        # N11: любой сбой ниже (в т.ч. в _free_meta_parameters) обязан закрыть mmap — иначе
-        # дескрипторы шардов живут до конца процесса и файлы нельзя удалить/перезаписать.
+        # N11: любой сбой ниже (в т.ч. в _free_meta_parameters) обязан закрыть дескрипторы шардов —
+        # иначе они живут до конца процесса и файлы нельзя удалить/перезаписать.
         model = build_streamed(model_cls, config, weights, device=device, prefetch=prefetch,
                               pin_memory=pin_memory, lookahead=lookahead, stats=stats)
         # B1-bis: без этого `model.device` и `get_module_execution_device()` отдают `meta`, и
