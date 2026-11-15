@@ -13,7 +13,3 @@ dist/
 *.egg-info/
 tmp*
 tests/check-tiny/
-
-# pi agent runs
-.pi/runs/
-.pi/worktrees/

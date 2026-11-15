@@ -1,4 +1,6 @@
-"""qwenstyle — модульный каркас Qwen-Image-2.1 + FUSAL anime LoRA.
+"""qwenstyle — пакет для NSFW-style (локальная стилизация/правка/генерация на Qwen-Image-2.1).
+
+Стилевой адаптер FUSAL R80 — опция, не требование.
 
 Единый источник параметров запуска и ключей кэша — `RunConfig`/`BatchConfig` из
 `qwenstyle.config`; подкоманды лежат в `qwenstyle/cmd/`, бекенды — в `qwenstyle/backends/`.

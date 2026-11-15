@@ -55,7 +55,8 @@ def discover_commands(package: str = COMMAND_PACKAGE) -> tuple[dict[str, ModuleT
 def build_parser(commands: dict[str, ModuleType]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m qwenstyle",
-        description="Qwen-Image-2.1 + FUSAL anime LoRA: генерация, апскейл, кэш, диагностика.",
+        description=("NSFW-style: локальная стилизация, правка и генерация на Qwen-Image-2.1; "
+                     "стилевой адаптер (FUSAL R80) — опция."),
         epilog=f"qwenstyle {__version__} · подкоманда без аргументов печатает свою справку",
     )
     parser.add_argument("--version", action="version", version=f"qwenstyle {__version__}")
