@@ -36,8 +36,9 @@ encoder:
   requires_vision: true
   dtype: bfloat16
   # 62.1 GiB bf16 в 63.6 GiB RAM вместе с активациями не влезают -> стриминг по слоям обязателен.
-  # `auto` на машине с CUDA разрешается в `cuda` и сам включает stream=True/prefetch=4 (он же
-  # отключает pinned-память при offload=group — см. AGENTS.md §4); на машине без CUDA останется CPU.
+  # `auto` на машине с CUDA разрешается в `cuda` и сам включает stream=True/prefetch=4;
+  # на машине без CUDA останется CPU.
+  # offload group: pin_memory включается как обычно (при неудаче pinned-аллокации пул деградирует до pageable RAM).
   device: auto
   stream: true
   prefetch: 4

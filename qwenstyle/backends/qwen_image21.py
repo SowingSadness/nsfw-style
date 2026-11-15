@@ -179,10 +179,13 @@ def _load_base_encoder_gpu(cfg: Any) -> Any:
 
     enc = cfg.encoder.resolved()
     device = _encoder_device(cfg)
-    pin = bool(cfg.encoder_pin_memory)          # offload=group -> pinned уже занят (см. RunConfig)
-    if pin != bool(enc.pin_memory):
-        print("[te] pin_memory выключен: трансформер уже держит pinned-память (offload group), "
-              "а на Windows pin — тот же ресурс (см. AGENTS.md §4)", flush=True)
+    # `cfg.encoder_pin_memory` — это уже разрешённое поле `encoder.pin_memory` (pin включён
+    # и при `offload=group`); страховка от упавшей аллокации живёт в `streaming._PinnedPool`.
+    # pin — транспорт, а не математика: ключ кэша эмбеддингов от него не зависит.
+    pin = bool(getattr(cfg, "encoder_pin_memory", getattr(enc, "pin_memory", True)))
+    if not pin:
+        print("[te] энкодер base: pin_memory отключён пользователем (encoder.pin_memory=false)",
+              flush=True)
     print(f"[te] энкодер base: {device}-стриминг (stream=True, prefetch={enc.prefetch}, "
           f"pin_memory={int(pin)}, lookahead={enc.lookahead}) — 17.5 ГБ не грузим "
           f"целиком", flush=True)
