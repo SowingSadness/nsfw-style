@@ -1,19 +1,18 @@
-"""Метка профиля (`model_label`) и авто-подбор эталона (`check-parity`): без GPU и без весов.
+"""Публичные пресеты (13) и метка профиля (`model_label`): без GPU, весов и сети.
 
 Запуск: `PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe tests/test_profiles.py`
 Успех: `PASS` по каждому кейсу, `ALL PASS` и exit 0; провал: `FAIL <кейс>: ...` и exit 1.
 
-Зачем: `model_label` — не косметика. Её печатает `[profile]`, и по ней `run --check-parity auto`
-(`parity._match_entry`) выбирает запись эталона. Пока `preview` считался «тем же base, но
-черновым», прогон FLUX.2-пресета `preview` подбирал запись `base-640-8` (Qwen + FUSAL R80) и
-сверял несравнимое. Тест фиксирует два правила:
+Зачем: публичная матрица профилей — это **контракт** для `README`/`gen --preset` и для
+`models download --profile` (`qwenstyle/profiles.py`). Ошибка в ней не падает: она просто
+обещает пользователю не тот кадр (1080p на 8 ГБ VRAM или 4K на 16 ГБ RAM). Тест фиксирует:
 
-1. `base` — только профили **Qwen-Image-2.1 + FUSAL R80** (`base`/`qwen`/`preview-qwen`/`full-qwen`);
-   остальные пресеты (включая `preview`, который теперь FLUX.2) остаются своими именами;
-2. каждая запись `tests/reference.json` воспроизводится своим пресетом и **сама себя** находит
-   через `parity._match_entry` — иначе авто-сверка молча сравнивала бы чужой кадр.
-
-Сеть и веса не нужны: только конфиги и JSON эталонов.
+1. **13 публичных пресетов резолвятся** и совпадают с манифестами профилей (`PROFILES`);
+2. **числа матрицы**: `size_px`, `steps`, `offload`, LoRA 0/0.7, `target_height`
+   (weak → 1080, strong → 1440, flagship → 2160), апскейл/энкодер/кеш точности;
+3. публичные пресеты не тянут dev-опции (`seedvr2`, `flux2`) и не смотрят в легаси-кеш;
+4. **метки пресетов по семейству модели** (старый баг: `preview` — FLUX.2, но считался `base`);
+5. ключевые dev-пресеты живы и резолвятся (на них опираются эксперименты, README их не обещает).
 """
 from __future__ import annotations
 
@@ -24,14 +23,41 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+sys.dont_write_bytecode = True                   # тест не должен оставлять __pycache__ в пакете
 
-from qwenstyle.cmd import parity                     # noqa: E402 — после правки sys.path
-from qwenstyle.cmd.run import model_label             # noqa: E402
-from qwenstyle.config import RunConfig, available_presets   # noqa: E402
+from qwenstyle.cmd import config as config_cmd      # noqa: E402 — после правки sys.path
+from qwenstyle.cmd.run import BASE_LORA, model_label   # noqa: E402
+from qwenstyle.config import (                      # noqa: E402
+    EMBEDS_DIR,
+    MODELS_DIR,
+    RunConfig,
+    available_presets,
+)
+from qwenstyle.profiles import PROFILE_ORDER, PROFILES   # noqa: E402
 
-#: Жёстко зафиксированные ожидания только для тех пресетов, где ошибка уже случалась.
-#: Остальные проверяются правилом (см. `_family`), чтобы новый пресет не ломал тест сам по себе.
-EXPECTED = {
+#: Публичная матрица: пресет -> (size_px, steps, lora, offload, target_height).
+#: Источник — план публикации (13 пресетов), а не вывод кода: тест ловит расхождение с ним.
+MATRIX: dict[str, tuple[int, int, float, str, int]] = {
+    "weak-preview":        (480,  8, 0.0, "group", 0),
+    "weak-release":        (640,  8, 0.0, "group", 1080),
+    "weak-preview-anime":  (480,  8, 0.7, "group", 0),
+    "weak-release-anime":  (640, 25, 0.7, "group", 1080),
+    "strong-preview":      (768,  8, 0.0, "none", 0),
+    "strong-release":      (960, 25, 0.0, "group", 1440),
+    "strong-preview-anime": (768, 8, 0.7, "none", 0),
+    "strong-release-anime": (960, 25, 0.7, "group", 1440),
+    "flagship-preview":    (768,  8, 0.0, "none", 0),
+    "flagship-preview-anime": (768, 8, 0.7, "none", 0),
+    "flagship-release":    (1440, 25, 0.0, "group", 2160),
+    "flagship-release-anime": (1440, 25, 0.7, "group", 2160),
+    "flagship-4k-fast":    (1088, 25, 0.0, "group", 2160),
+}
+
+#: Целевая высота кадра у профиля: именно её обещает README (1080p / 1440p / 4K UHD).
+PROFILE_TARGET_HEIGHT = {"weak": 1080, "strong": 1440, "flagship": 2160}
+
+#: Жёстко зафиксированные ожидания метки там, где ошибка уже случалась.
+EXPECTED_LABELS = {
     "base": "base",
     "qwen": "base",
     "preview-qwen": "base",
@@ -44,93 +70,207 @@ EXPECTED = {
     "h3-image": "h3-image",
 }
 
+#: Dev-пресеты, на которые опираются эксперименты/README разработчика (публичными не являются).
+DEV_PRESETS = ("base", "anime", "turbo", "flux2", "preview", "demo", "full-flux2", "full-qwen",
+               "qwen-2k", "preview-qwen", "h3-image")
 
-def _family(cfg: RunConfig) -> str:
-    """Семейство модели по конфигу: `flux2` | `turbo` | `qwen` (Qwen-Image-2.1 + FUSAL R80).
+#: Dev-опции, которых в публичных пресетах быть не должно (план публикации, решения 4 и 12).
+DEV_ONLY_BACKENDS = ("seedvr2", "flux2")
 
-    Любой другой бекенд — своё семейство: `minimax_h3_image` (`h3-image`) -> имя бекенда, и
-    `model_label` отдаёт для него имя пресета, а не `base`.
-    """
-    backend = str(cfg.generation.backend)
-    if backend == "flux2":
-        return "flux2"
-    if backend != "qwen_image21":
-        return backend                     # h3-image и прочие: метка = имя пресета
-    lora = getattr(cfg.generation.lora, "filename", None) or ""
-    transformer = " ".join(str(part) for part in (cfg.generation.transformer or ()))
-    if "turbo" in f"{transformer} {lora}".lower():
-        return "turbo"
-    return "qwen"
+
+def public_presets() -> list[str]:
+    """13 публичных пресетов в порядке профилей — как их печатает `gen`/`models download`."""
+    names: list[str] = []
+    for profile_name in PROFILE_ORDER:
+        names.extend(PROFILES[profile_name].presets)
+    return names
+
+
+def _lora_scale(cfg: RunConfig) -> float:
+    """Сила LoRA числом (`0.0`, если адаптера нет) — int/float в пресетах сравнивать нельзя."""
+    lora = cfg.generation.lora
+    return 0.0 if lora is None else float(lora.scale)
+
+
+# --------------------------------------------------------------------------- #
+# Кейсы
+# --------------------------------------------------------------------------- #
+
+def case_public_presets_resolve() -> None:
+    """1. Все 13 публичных пресетов из манифестов профилей существуют и резолвятся."""
+    names = public_presets()
+    if len(names) != 13:
+        raise AssertionError(f"публичных пресетов {len(names)}, в плане 13: {names}")
+    if len(set(names)) != len(names):
+        raise AssertionError(f"пресет продублирован в профилях: {names}")
+    if sorted(names) != sorted(MATRIX):
+        raise AssertionError(f"состав публичных пресетов разошёлся с матрицей теста: "
+                            f"только в профилях {sorted(set(names) - set(MATRIX))}, "
+                            f"только в тесте {sorted(set(MATRIX) - set(names))}")
+    registered = available_presets()
+    missing = [name for name in names if name not in registered]
+    if missing:
+        raise AssertionError(f"нет файлов qwenstyle/presets для {missing}")
+    for name in names:
+        RunConfig.from_profile(name)                       # не резолвится — исключение и FAIL
+    print(f"  ok: 13 публичных пресетов резолвятся, профилей {len(PROFILE_ORDER)}")
+
+
+def case_matrix() -> None:
+    """2. Числа матрицы: размер, шаги, LoRA, offload, целевая высота, апскейл, энкодер, кеш."""
+    for name, (size_px, steps, lora, offload, target) in MATRIX.items():
+        cfg = RunConfig.from_profile(name)
+        got = (cfg.size_px, cfg.steps, _lora_scale(cfg), cfg.generation.offload,
+               int(cfg.upscale.target_height or 0))
+        want = (size_px, steps, lora, offload, target)
+        if got != want:
+            raise AssertionError(f"{name}: (size_px, steps, lora, offload, target_height) = "
+                                 f"{got}, в матрице {want}")
+        if cfg.upscale.backend != "esrgan":
+            raise AssertionError(f"{name}: апскейл {cfg.upscale.backend!r}, а публичные профили "
+                                 f"обещают esrgan")
+        if cfg.upscale.factor:
+            raise AssertionError(f"{name}: upscale.factor={cfg.upscale.factor} — фактор обязан "
+                                 f"считаться из target_height (0 в пресетах)")
+        if not target and cfg.upscale.target_height:
+            raise AssertionError(f"{name}: target_height={cfg.upscale.target_height} при "
+                                 f"нулевом факторе")
+        if cfg.encoder.name != "heretic":
+            raise AssertionError(f"{name}: энкодер {cfg.encoder.name!r}, публичные — heretic")
+    print(f"  ok: {len(MATRIX)} пресетов совпали с публичной матрицей (size/steps/lora/offload/target)")
+
+
+def case_profiles_matrix() -> None:
+    """3. Профили: 4/4/5 пресетов, целевая высота 1080/1440/2160, релизы её держат."""
+    expected_counts = {"weak": 4, "strong": 4, "flagship": 5}
+    for profile_name in PROFILE_ORDER:
+        profile = PROFILES[profile_name]
+        count = len(profile.presets)
+        if count != expected_counts[profile_name]:
+            raise AssertionError(f"профиль {profile_name}: пресетов {count}, "
+                                 f"ожидалось {expected_counts[profile_name]}")
+        target = PROFILE_TARGET_HEIGHT[profile_name]
+        if int(profile.target_height) != target:
+            raise AssertionError(f"профиль {profile_name}: target_height={profile.target_height}, "
+                                 f"ожидалось {target}")
+        for preset in profile.presets:
+            cfg = RunConfig.from_profile(preset)
+            if "release" not in preset:
+                continue                            # preview — черновик, апскейла не обещает
+            if not cfg.upscale.target_height:
+                raise AssertionError(f"{preset}: релиз профиля {profile_name} без апскейла")
+            if int(cfg.upscale.target_height) != target:
+                raise AssertionError(f"{preset}: target_height={cfg.upscale.target_height}, "
+                                     f"у профиля {profile_name} {target}")
+        if profile.disk_gib <= 0 or not profile.repos:
+            raise AssertionError(f"профиль {profile_name}: пустой манифест ({profile})")
+    print("  ok: weak 4/1080, strong 4/1440, flagship 5/2160 — релизы целятся в высоту профиля")
+
+
+def case_public_stays_public() -> None:
+    """4. Публичные пресеты без dev-опций и без легаси-путей кеша."""
+    for name in public_presets():
+        cfg = RunConfig.from_profile(name)
+        transport = " ".join(str(part) for part in (cfg.generation.transformer or ()))
+        haystack = f"{cfg.generation.backend} {cfg.upscale.backend} {transport}".lower()
+        for token in DEV_ONLY_BACKENDS:
+            if token in haystack:
+                raise AssertionError(f"{name}: публичный пресет ссылается на dev-опцию {token!r}")
+        precision_cache = str(cfg.generation.precision_cache or "")
+        if precision_cache and not precision_cache.startswith(f"{MODELS_DIR.as_posix()}/"):
+            raise AssertionError(f"{name}: precision_cache={precision_cache!r} вне "
+                                 f"{MODELS_DIR.as_posix()}/ (кеш моделей отделён от эмбеддингов)")
+        config_cmd.describe(cfg)                   # дамп конфига не падает на публичном пресете
+    # Кеши разделены: файлы эмбеддингов живут в cache/embeds, а не в корне cache/
+    if EMBEDS_DIR.parent.name != "cache" or EMBEDS_DIR.name != "embeds":
+        raise AssertionError(f"EMBEDS_DIR={EMBEDS_DIR!r} — ожидался cache/embeds")
+    print("  ok: 13 пресетов без seedvr2/flux2, fp8-кеш в cache/models, эмбеддинги в cache/embeds")
 
 
 def case_labels() -> None:
-    """1. Метка пресета = семейство модели (а не «черновой/финальный»).
+    """5. Метка пресета: `base` только для базовой модели, иначе — имя пресета.
 
-    Правило, а не таблица: `flux2`-профили остаются своими именами (`preview` — тоже FLUX.2),
-    turbo-профиль — `turbo`, бекенды со своим семейством (`minimax_h3_image`/`h3-image`) — имя
-    пресета, всё остальное (Qwen-Image-2.1 + FUSAL R80) — `base`. Новый пресет (`anime`, `*`)
-    не требует правки теста — требует только правильной метки.
+    `model_label` — не косметика: её печатает `[profile]`, по ней видно, каким семейством сделан
+    кадр. Правило (вытекает из докстринга `cmd.run.model_label`): метка `base` ставится, только
+    если прогон идёт на Qwen-Image-2.1 с адаптером FUSAL R80; другой трансформер (turbo), другой
+    адаптер или другой бекенд (FLUX.2, MiniMax-H3) — это **имя пресета**. Новый пресет не требует
+    правки теста — только правильной метки.
     """
-    names = sorted(available_presets())
-    for name in names:
+    for name in sorted(available_presets()):
         cfg = RunConfig.from_profile(name)
         got = model_label(cfg)
-        family = _family(cfg)
-        want = "base" if family == "qwen" else (family if family == "turbo" else name)
+        want = _expected_label(cfg, name)
         if got != want:
-            raise AssertionError(f"пресет {name} ({family}): метка {got!r}, ожидалась {want!r}")
-        if name in EXPECTED and got != EXPECTED[name]:
-            raise AssertionError(f"пресет {name}: метка {got!r}, зафиксировано {EXPECTED[name]!r}")
-    families: dict[str, int] = {}
-    for name in names:
-        label = model_label(RunConfig.from_profile(name))
-        families[label] = families.get(label, 0) + 1
-    print(f"  ok: {len(names)} пресетов -> метки {sorted(families)}")
+            raise AssertionError(f"пресет {name}: метка {got!r}, ожидалась {want!r} "
+                                 f"(backend={cfg.generation.backend}, "
+                                 f"transformer={cfg.generation.transformer})")
+        if name in EXPECTED_LABELS and got != EXPECTED_LABELS[name]:
+            raise AssertionError(f"пресет {name}: метка {got!r}, "
+                                 f"зафиксировано {EXPECTED_LABELS[name]!r}")
+    base_labels = sorted(name for name in available_presets()
+                         if model_label(RunConfig.from_profile(name)) == "base")
+    print(f"  ok: {len(available_presets())} пресетов -> base у {len(base_labels)} "
+          f"({', '.join(base_labels)})")
 
     # Явная защита от старого бага: `preview` — FLUX.2, а не черновик base.
     preview = RunConfig.from_profile("preview")
-    if model_label(preview) == "base":
-        raise AssertionError("preview снова считается base (это FLUX.2-пресет)")
     if preview.generation.backend != "flux2":
         raise AssertionError(f"preview больше не flux2: backend={preview.generation.backend!r}")
+    if model_label(preview) == "base":
+        raise AssertionError("preview снова считается base (это FLUX.2-пресет)")
     if model_label(RunConfig.from_profile("preview-qwen")) != "base":
         raise AssertionError("preview-qwen (Qwen + FUSAL R80) обязан остаться base")
-    print("  ok: preview = FLUX.2 (не base), preview-qwen = base")
+    if model_label(RunConfig.from_profile("weak-preview")) == "base":
+        raise AssertionError("weak-preview идёт на Turbo-трансформере и не может быть base")
+    print("  ok: preview = FLUX.2 (не base), preview-qwen = base, weak-preview = свой профиль")
 
 
-def case_reference_self_match() -> None:
-    """2. Каждая запись эталона воспроизводится своим пресетом и находит сама себя по метке."""
-    reference = parity.load_reference(REPO_ROOT / "tests" / "reference.json")
-    entries = reference.get("entries") or {}
-    if not entries:
-        raise AssertionError("tests/reference.json пуст")
+def case_dev_presets() -> None:
+    """6. Ключевые dev-пресеты живы (на них опираются эксперименты, README их не обещает)."""
+    registered = available_presets()
+    missing = [name for name in DEV_PRESETS if name not in registered]
+    if missing:
+        raise AssertionError(f"пропали dev-пресеты {missing}")
+    for name in DEV_PRESETS:
+        cfg = RunConfig.from_profile(name)
+        if cfg.generation.backend not in ("qwen_image21", "flux2", "minimax_h3_image"):
+            raise AssertionError(f"{name}: неизвестный бекенд {cfg.generation.backend!r}")
+        if name not in public_presets() and cfg.preset != name:
+            raise AssertionError(f"{name}: preset={cfg.preset!r}, ожидалось имя пресета")
+    print(f"  ok: {len(DEV_PRESETS)} dev-пресетов резолвятся и не входят в публичную матрицу")
 
-    checked = 0
-    for name, entry in entries.items():
-        params = entry.get("params") or {}
-        cfg = parity.config_from_params(params, out="out/tests/profile-match.png")
-        label = model_label(cfg)
-        if label != str(params.get("model") or "base"):
-            raise AssertionError(f"{name}: метка {label!r} не совпадает с model="
-                                 f"{params.get('model')!r} из эталона")
-        if str(entry.get("kind") or "run") != "run":
-            continue                                  # батч проверяется своим путём
-        match = parity._match_entry(reference, cfg)
-        if match is None:
-            raise AssertionError(f"{name}: авто-подбор ничего не нашёл (метка {label!r})")
-        if match[0] != name:
-            raise AssertionError(f"{name}: авто-подбор вернул чужую запись {match[0]!r}")
-        checked += 1
-    print(f"  ok: {checked} записей kind=run находят себя через _match_entry")
+
+def _expected_label(cfg: RunConfig, name: str) -> str:
+    """Ожидаемая метка по конфигу: `base` только для Qwen-Image-2.1 + FUSAL R80, иначе имя.
+
+    Зеркалит правило `model_label`, но записано как спецификация (какие условия дают `base`),
+    а не вызовом того же кода: тест обязан ловить регресс правила, а не повторять его.
+    """
+    gen = cfg.generation
+    if str(gen.backend) != "qwen_image21":
+        return name                        # FLUX.2 / MiniMax-H3: своё семейство
+    transformer = gen.transformer or ()
+    if transformer and str(transformer[0]) != str(gen.repo):
+        return name                        # turbo: трансформер из другого репозитория
+    lora = getattr(gen.lora, "filename", None) or ""
+    if lora and lora != BASE_LORA:
+        return name                        # другой адаптер = другой профиль
+    return "base"
+
+
+CASES = (
+    ("1. 13 публичных пресетов резолвятся", case_public_presets_resolve),
+    ("2. числа публичной матрицы", case_matrix),
+    ("3. профили: состав и целевая высота", case_profiles_matrix),
+    ("4. публичные пресеты без dev-опций", case_public_stays_public),
+    ("5. метки пресетов по семейству модели", case_labels),
+    ("6. dev-пресеты живы", case_dev_presets),
+)
 
 
 def main() -> int:
-    cases = (
-        ("1. метки пресетов по семейству модели", case_labels),
-        ("2. авто-подбор эталона по метке", case_reference_self_match),
-    )
     failed = 0
-    for label, case in cases:
+    for label, case in CASES:
         try:
             case()
             print(f"PASS {label}", flush=True)

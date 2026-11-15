@@ -36,7 +36,7 @@ if str(REPO_ROOT) not in sys.path:
 sys.dont_write_bytecode = True                   # тест не должен оставлять __pycache__ в пакете
 
 from qwenstyle import pipeline                    # noqa: E402 — после правки sys.path
-from qwenstyle.config import RunConfig, prompt_md5  # noqa: E402
+from qwenstyle.config import RunConfig, models_path, prompt_md5  # noqa: E402
 from qwenstyle.registry import RegistryError, discover, get_generation, get_encoder  # noqa: E402
 
 BACKEND = "minimax_h3_image"
@@ -105,8 +105,12 @@ def case_preset() -> None:
     assert cfg.generation.transformer is None, \
         f"transformer не должен наследоваться от base: {cfg.generation.transformer}"
     assert cfg.generation.precision == "fp8", cfg.generation.precision
-    assert cfg.generation.precision_cache == "cache/fp8_transformer_h3_image", \
+    # Кеш моделей живёт в `cache/models/` (шаг 4 публикации): пресет может писать
+    # легаси-путь `cache/fp8_transformer_h3_image`, канонический вид даёт `config.models_path`.
+    canonical = models_path("cache/fp8_transformer_h3_image")
+    assert models_path(cfg.generation.precision_cache) == canonical, \
         cfg.generation.precision_cache
+    assert canonical.startswith("cache/models/"), canonical
     assert cfg.generation.offload == "group", cfg.generation.offload
     assert cfg.generation.sampler_kwargs.get("offload_blocks") == 1, cfg.generation.sampler_kwargs
     assert cfg.steps == 6, f"steps={cfg.steps}"
@@ -199,8 +203,8 @@ def case_implementation_and_probe() -> None:
     assert info["caps"]["requires_image"] is False, info["caps"]
     assert info["text_hidden_dim"] == 5120, info["text_hidden_dim"]
     assert "components" in info and "precision_cache" in info, sorted(info)
-    assert Path(info["precision_cache"]["path"]) == Path("cache/fp8_transformer_h3_image"), \
-        info["precision_cache"]
+    assert Path(info["precision_cache"]["path"]) == Path(
+        models_path("cache/fp8_transformer_h3_image")), info["precision_cache"]
     has_snapshot = any(H3_SNAPSHOT.glob("*/transformer_diffusers")) if H3_SNAPSHOT.is_dir() else False
     if has_snapshot:
         assert info["components"]["transformer_diffusers"]["present"], info["components"]

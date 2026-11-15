@@ -34,7 +34,7 @@ if str(REPO_ROOT) not in sys.path:              # запуск из любого
 sys.dont_write_bytecode = True                  # тест не должен оставлять __pycache__ в пакете
 
 from qwenstyle import registry                    # noqa: E402 — после правки sys.path
-from qwenstyle.config import RunConfig            # noqa: E402
+from qwenstyle.config import RunConfig, models_path   # noqa: E402
 
 NAME = "h3qwen32-heretic"
 REPO = "llmfan46/Qwen3-VL-32B-Instruct-ultra-uncensored-heretic"
@@ -89,8 +89,12 @@ def case_registered() -> None:
     assert cls.requires_vision is True, "Qwen3-VL кодирует картинку vision-башней"
     assert cls.repo == REPO, f"repo={cls.repo!r}"
     assert cls.revision, "ревизия обязана быть закреплена (R1: веса входят в ключ кэша)"
-    assert cls.local_weights is True, "веса 32B лежат в cache/weights (пересобранные шарды)"
-    assert cls.local_dir == "cache/weights/h3qwen32-heretic", f"local_dir={cls.local_dir!r}"
+    assert cls.local_weights is True, "веса 32B лежат локально (пересобранные шарды)"
+    # Каталог весов — кеш моделей (`cache/models/...`, шаг 4 публикации); литерал пресета может
+    # остаться легаси-путём `cache/weights/...`, канонический вид даёт `config.models_path`.
+    assert models_path(cls.local_dir) == models_path(
+        "cache/weights/h3qwen32-heretic"), f"local_dir={cls.local_dir!r}"
+    assert models_path(cls.local_dir).startswith("cache/models/weights/"), cls.local_dir
     assert (cls.memory_gib or 0) > 60, f"memory_gib={cls.memory_gib} — ожидались ~62 GiB"
     assert NAME in registry.available("encoder"), "бекенд не попал в список энкодеров"
     # 8B-энкодеры не тронуты

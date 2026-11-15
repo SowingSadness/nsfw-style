@@ -7,8 +7,8 @@
     [cuda]       версия CUDA, доступность, GPU, занято/всего VRAM
     [ram]        свободно/всего RAM (psutil; без него — прочерк)
     [offline]    HF_HOME, HF_HUB_OFFLINE, телеметрия, PYTORCH_CUDA_ALLOC_CONF
-    [cache]      cache/embeds*.pt (записей, размер, разрешения, legacy), cache/fp8_transformer*,
-                 cache/weights/*, hf-cache
+    [cache]      cache/embeds (записей, размер, разрешения, legacy) и отдельно cache/models
+                 (fp8-квантование + веса энкодеров — не вытесняется никогда), hf-cache
     [disk]       свободно/всего на диске репозитория
 
 Только чтение, ничего не грузит и не удаляет (AGENTS.md R2: read-only без подтверждений).
@@ -25,6 +25,7 @@ from pathlib import Path
 
 from ..backends.base import REPO_ROOT
 from ..cache import human_bytes, scan_embeds
+from ..config import EMBEDS_DIR, MODELS_DIR
 
 NAME = "env"
 HELP = "версии, CUDA/GPU/VRAM/RAM, offline-режим, счётчики кэшей и свободный диск"
@@ -83,29 +84,53 @@ def _ram_line() -> str:
         return "psutil нет"
 
 
+def _models_cache() -> list[tuple[str, int]]:
+    """Содержимое `cache/models` (путь относительно репозитория, размер в байтах).
+
+    Кеш моделей — другая природа, чем `cache/embeds`: fp8-квантование (`fp8_transformer*`) и
+    локальные веса энкодеров/апскейлера (`weights/`) пересоздаются один раз в жизни, поэтому
+    `cache prune` их не трогает; пересборка — только `--rebuild-fp8-cache` (AGENTS.md, R2).
+    """
+    models_dir = REPO_ROOT / MODELS_DIR
+    if not models_dir.is_dir():
+        return []
+    out: list[tuple[str, int]] = []
+    for path in sorted(models_dir.iterdir()):
+        try:
+            size = _dir_size(path) if path.is_dir() else path.stat().st_size
+        except OSError:
+            continue
+        out.append((path.relative_to(REPO_ROOT).as_posix(), size))
+    return out
+
+
 def _cache_lines() -> list[str]:
-    """Счётчики кэшей: эмбеддинги, fp8-трансформеры, веса, hf-cache. Ничего не меняет."""
-    cache_dir = REPO_ROOT / "cache"
-    entries = scan_embeds(cache_dir)
+    """Счётчики кэшей: `cache/embeds` (вычисления) и `cache/models` (веса), плюс hf-cache.
+
+    Две ветки кеша печатаются раздельно, потому что управляются по-разному: эмбеддинги
+    вытесняются (`cache prune`, `cache_supersede`), а кеш моделей — никогда.
+    """
+    embeds_dir = REPO_ROOT / EMBEDS_DIR
+    entries = scan_embeds(embeds_dir)
     total = sum(entry.size for entry in entries)
     crops = sorted({entry.crop for entry in entries})
-    lines = [f"эмбеддинги: {len(entries)} записей, {human_bytes(total)}, "
-             f"разрешений: {len(crops)} ({', '.join(crops) or '—'})"]
+    lines = [f"{EMBEDS_DIR.as_posix()}: {len(entries)} записей, {human_bytes(total)}, "
+             f"сеток: {len(crops)} ({', '.join(crops) or '—'}) — вытесняется "
+             f"(`cache prune`, `cache_supersede`)"]
     legacy = [entry for entry in entries if entry.legacy]
     if legacy:
         lines.append(f"из них по старой схеме ключа (без хеша картинки): {len(legacy)} — мёртвые, "
                      f"чистятся `python -m qwenstyle cache prune --legacy --apply`")
-    for path in sorted(cache_dir.glob("fp8_transformer*")):
-        if path.is_dir():
-            lines.append(f"{path.relative_to(REPO_ROOT).as_posix()}: {human_bytes(_dir_size(path))} "
-                         f"(не чистится автоматически)")
-        else:
-            lines.append(f"{path.relative_to(REPO_ROOT).as_posix()}: "
-                         f"{human_bytes(path.stat().st_size)} (не чистится автоматически)")
-    weights = cache_dir / "weights"
-    if weights.is_dir():
-        lines.append(f"cache/weights: {human_bytes(_dir_size(weights))} "
-                     f"(ESRGAN/SeedVR2/heretic — не чистится автоматически)")
+
+    models = _models_cache()
+    models_total = sum(size for _, size in models)
+    lines.append(f"{MODELS_DIR.as_posix()}: {len(models)} объект(ов), {human_bytes(models_total)} — "
+                 f"не вытесняется никогда (пересборка: --rebuild-fp8-cache)")
+    if not models:
+        lines.append(f"  нет каталога {MODELS_DIR.as_posix()} (fp8-кэш/веса ещё не собраны)")
+    for name, size in models:
+        lines.append(f"  {name}: {human_bytes(size)}")
+
     hf_home = Path(os.environ.get("HF_HOME", str(REPO_ROOT / "hf-cache")))
     if hf_home.is_dir():
         lines.append(f"{hf_home}: {human_bytes(_dir_size(hf_home))}")
@@ -170,7 +195,8 @@ def _json_report() -> int:
     """Машиночитаемый снимок тех же данных: версии/GPU/кэши/диск/оффлайн."""
     import json
 
-    entries = scan_embeds(REPO_ROOT / "cache")
+    entries = scan_embeds(REPO_ROOT / EMBEDS_DIR)
+    models = _models_cache()
     usage = shutil.disk_usage(REPO_ROOT)
     data = {
         "python": {"version": sys.version.split()[0], "executable": sys.executable},
@@ -179,10 +205,16 @@ def _json_report() -> int:
                     ("HF_HOME", "HF_HUB_OFFLINE", "HF_HUB_DISABLE_TELEMETRY",
                      "PYTORCH_CUDA_ALLOC_CONF")},
         "cache": {
+            "embeds_dir": EMBEDS_DIR.as_posix(),
             "embeds": len(entries),
             "embeds_bytes": sum(entry.size for entry in entries),
             "resolutions": sorted({entry.resolution for entry in entries}),
+            "crops": sorted({entry.crop for entry in entries}),
             "legacy": sum(1 for entry in entries if entry.legacy),
+            "models_dir": MODELS_DIR.as_posix(),
+            "models_bytes": sum(size for _, size in models),
+            "models": [{"path": name, "bytes": size} for name, size in models],
+            "models_evictable": False,
         },
         "disk": {"repo": str(REPO_ROOT), "free": usage.free, "total": usage.total},
     }
