@@ -25,8 +25,10 @@ seed'ов/резолюций пишут в один и тот же файл и �
   только в консоль.
 * **Лог — наблюдение, а не результат**: любая ошибка файловой системы не роняет прогон,
   печатается одна строка `[log] …`, и тест/генерация продолжаются.
-* Батч (`run_batch`) — один процесс на N seed'ов, поэтому одна папка на сессию:
-  `<out-dir>/_logs/<YYYYmmdd-HHMMSS>/run.log` (`batch_log_dir`).
+* **Сессия (`gen`)** — один процесс на N seed'ов, поэтому **одна папка на сессию**, а не на кадр:
+  `cfg.log_dir` (`out/<имя>/gen-YYYYMMDD-HHMM/`) задаёт её явно (`pipeline._open_log`), и
+  `run.log`/`meta.json` лежат в корне сессии рядом с кадрами `s{N}.png`. Без `cfg.log_dir`
+  `run_batch` падает в прежнюю папку `<out-dir>/_logs/<YYYYmmdd-HHMMSS>/` (`batch_log_dir`).
 
 Модуль без тяжёлых импортов: только stdlib, чтобы `--help` и `dry-run` оставались мгновенными.
 """
@@ -278,7 +280,11 @@ def _write_meta(directory: Path, cfg: Any) -> None:
 
 
 def batch_log_dir(out_dir: str | Path) -> Path:
-    """Папка лога батча: `<out-dir>/_logs/<YYYYmmdd-HHMMSS>` — одна на сессию, а не на seed."""
+    """Папка лога сессии: `<out-dir>/_logs/<YYYYmmdd-HHMMSS>` — одна на прогон, не на seed.
+
+    Запасной путь для `run_batch`: `gen` задаёт каталог явно (`cfg.log_dir`), а этот вариант
+    остаётся для вызова без `log_dir` (тесты, скрипты, `run --set batch.*`).
+    """
     stamp = time.strftime("%Y%m%d-%H%M%S")
     return Path(str(out_dir).replace("\\", "/")) / BATCH_LOGS_DIR / stamp
 

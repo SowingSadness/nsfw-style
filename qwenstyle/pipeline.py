@@ -727,10 +727,14 @@ def _open_log(log: "RunLog | None", directory: Path, cfg: RunConfig) -> None:
     Вызывается **после** `_plan`: только там известно настоящее имя кадра (`out_path` с
     `-s{seed}` и `-x{factor}`), а значит и папка лога (`io.log_dir`). Строки, напечатанные
     раньше (`[plan]`), уже лежат в буфере `RunLog` и потянутся в файл в момент `attach`.
+
+    `cfg.log_dir` перебивает `directory`: `gen` кладёт `run.log`/`meta.json` в корень сессии
+    (`out/<имя>/gen-<stamp>/`), а не в подпапку кадра. `None` — прежняя раскладка.
     """
     if log is None:
         return
-    log.attach(directory, cfg=cfg)
+    explicit = getattr(cfg, "log_dir", None)
+    log.attach(Path(explicit) if explicit else directory, cfg=cfg)
 
 
 def run(cfg: RunConfig, log: "RunLog | None" = None) -> Result:
@@ -805,7 +809,8 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
     t0 = time.time()
     backend_cls = get_generation(cfg.generation.backend)
     plan = _plan(cfg, backend_cls, verbose=True)
-    _open_log(log, batch_log_dir(batch.out_dir), cfg)   # одна папка лога на сессию батча
+    # одна папка лога на сессию: `cfg.log_dir` (gen) или прежний `<out-dir>/_logs/<stamp>`
+    _open_log(log, batch_log_dir(batch.out_dir), cfg)
     seeds = parse_seeds(batch.seeds)
     if not seeds:
         raise ConfigError(f"run_batch: пустой список seed'ов ({batch.seeds!r})")
