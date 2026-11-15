@@ -37,7 +37,9 @@
    (`numel()==0`), а после восстановления forward модель считает снова;
 10. предупреждение «для base веса грузит diffusers — режим пропущен» удалено вместе с `_STREAM_WARNED`:
     `stream` для `base` теперь действует (бекенд подменяет `pipe.text_encoder`), а умолчание
-    `device=auto` -> cuda ещё и включает конвейер (`stream=True`, `prefetch=4`).
+    `device=auto` -> cuda ещё и включает конвейер (`stream=True`, `prefetch=4`); заодно pin сборки
+    конвейера (`encoder_pin_memory`) больше не зависит от `offload=group` — включён по умолчанию
+    и выключается только `--set encoder.pin_memory=0`.
 
 Билдер мини-модели переиспользуется из `tests/test_streaming.py` (импортом, не копией). Временные
 каталоги — только в системном temp; `sys.dont_write_bytecode` — чтобы в пакете не осталось
@@ -613,7 +615,8 @@ def case_base_stream_effective(tmp: Path) -> None:
     Раньше для `name=base` печаталось «веса грузит diffusers — режим пропущен», потому что энкодер
     собирал сам пайплайн. Теперь `qwen_image21.prepare` подменяет `pipe.text_encoder` стриминговой
     моделью, поэтому `stream` — рабочий флаг, а умолчание `device=auto` на машине с CUDA даёт
-    `stream=True` и `prefetch=4` без единого `--set`.
+    `stream=True` и `prefetch=4` без единого `--set`. Там же проверяется pin сборки конвейера:
+    `offload=group` его больше не выключает (pin — транспорт, а не математика).
     """
     from qwenstyle import config as qconfig
 
@@ -635,6 +638,15 @@ def case_base_stream_effective(tmp: Path) -> None:
                              f"ожидалось {qconfig.AUTO_ENCODER_PREFETCH}")
     if enc.device == "cpu" and int(enc.prefetch) != 0:
         raise AssertionError(f"без CUDA конвейер включать нельзя: prefetch={enc.prefetch!r}")
+
+    # Pin — транспорт (бит-в-бит), поэтому `offload=group` его не выключает: иначе staging шёл бы
+    # через pageable RAM даже там, где pinned выделяется. Явное выключение — только `--set`.
+    group_cfg = _pinned_base().merged(**{"generation.offload": "group"})
+    if group_cfg.generation.offload != "group" or group_cfg.encoder_pin_memory is not True:
+        raise AssertionError(f"offload=group выключил pin: {group_cfg.encoder_pin_memory!r}")
+    if group_cfg.merged(**{"encoder.pin_memory": "0"}).encoder_pin_memory is not False:
+        raise AssertionError("--set encoder.pin_memory=0 не выключает pin")
+    print("  ok: pin включён и при offload=group; выключает только encoder.pin_memory=0")
     print(f"  ok: _STREAM_WARNED удалён, stream=true работает; auto -> {enc.device}, "
           f"stream={enc.stream}, prefetch={enc.prefetch}")
 

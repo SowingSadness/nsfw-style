@@ -4,8 +4,8 @@
 Успех: `PASS` по каждому кейсу, `ALL PASS` и exit 0; провал: `FAIL <кейс>: ...` и exit 1.
 
 Зачем: на Windows pinned-память CUDA — это и блокировка страниц, и маппинг в адресное
-пространство GPU (WDDM), поэтому она упирается в те же ресурсы, что VRAM. С групповым offload
-трансформера рядом уже лежат ~6.6 ГиБ pinned-параметров, и первый же большой staging-буфер
+пространство GPU (WDDM), поэтому она упирается в те же ресурсы, что VRAM. Исторически групповой
+offload трансформера держал рядом ~6.6 ГиБ pinned-параметров, и первый же большой staging-буфер
 энкодера падал `CUDA error: out of memory` **при свободной VRAM**:
 
     [4/5] кодирование промта на GPU (Qwen3VL-8B, стриминг)...
@@ -13,8 +13,10 @@
       streaming.py: torch.empty(numel, dtype=tensor.dtype, pin_memory=True)
 
 Pinned — оптимизация транспорта (26.7 против 20.5 GB/s), а не условие корректности: числа те же
-бит-в-бит. Поэтому пул обязан **деградировать**, а не падать: `take()` возвращает исходный тензор
-из обычной RAM, пул выключается до конца сессии и печатает причину одной строкой.
+бит-в-бит. Поэтому pin включён по умолчанию **и при `offload=group`** (политика — кейс 5), а пул
+обязан **деградировать**, а не падать: `take()` возвращает исходный тензор из обычной RAM, пул
+выключается до конца сессии и печатает причину одной строкой. Деградация — страховка на случай
+чужой машины, а не штатный режим под group-offload.
 
 Кейсы:
 
@@ -159,37 +161,56 @@ def case_keeps_working() -> None:
 
 
 def case_pin_policy() -> None:
-    """5. Политика pin: при `offload=group` pinned staging выключен и флагом не включается."""
-    from qwenstyle.config import RunConfig
+    """5. Политика pin: включён по умолчанию и при `offload=group`; выключает только `--set`.
 
-    # Все пресеты, у которых `generation.offload: group` (fact-check по presets/*.yaml).
-    group_presets = ("full-qwen", "full-flux2", "anime", "h3-image")
-    for name in group_presets:
+    Pin — транспорт, а не математика: результат бит-в-бит от него не зависит, поэтому
+    `offload=group` его больше не выключает. Явное выключение — `encoder.pin_memory=0`
+    (`--set encoder.pin_memory=0`); если pinned-аллокация всё же упадёт, `_PinnedPool`
+    деградирует до pageable RAM (кейсы 3/4) — это страховка, а не штатный режим.
+    """
+    from qwenstyle.config import RunConfig
+    from qwenstyle.profiles import PROFILES
+
+    # Публичные пресеты машины (qwenstyle/profiles.py) и fact-check: какие из них `offload: group`.
+    public = [name for profile in PROFILES.values() for name in profile.presets]
+    expected_group = (
+        "weak-preview", "weak-release", "weak-preview-anime", "weak-release-anime",
+        "strong-release", "strong-release-anime",
+        "flagship-release", "flagship-release-anime", "flagship-4k-fast",
+    )
+    group = tuple(name for name in public
+                  if RunConfig.from_profile(name).generation.offload == "group")
+    if group != expected_group:
+        raise AssertionError(f"набор публичных пресетов с offload=group изменился: {group}")
+    for name in group:
         cfg = RunConfig.from_profile(name)
-        if cfg.generation.offload != "group":
-            raise AssertionError(f"{name}: ожидался offload=group, получено {cfg.generation.offload!r}")
         if cfg.encoder.pin_memory is not True:
             raise AssertionError(f"{name}: поле preseta должно остаться True (умолчание)")
-        if cfg.encoder_pin_memory:
-            raise AssertionError(f"{name}: pin должен быть выключен, а он включён")
-        forced = RunConfig.from_profile(name, **{"encoder.pin_memory": True})
-        if forced.encoder_pin_memory:
-            raise AssertionError(f"{name}: --set encoder.pin_memory=1 не должен обходить правило")
-    print(f"  ok: {', '.join(group_presets)} -> pin выключен принудительно (offload group)")
+        if cfg.encoder_pin_memory is not True:
+            raise AssertionError(f"{name}: offload=group не должен выключать pin")
+    print(f"  ok: {len(group)} публичных пресетов с offload=group -> pin включён")
 
-    for name in ("base", "preview", "preview-qwen", "turbo", "demo"):
+    for name in ("strong-preview", "flagship-preview"):
         cfg = RunConfig.from_profile(name)
         if cfg.generation.offload == "group":
-            continue
-        if not cfg.encoder_pin_memory:
-            raise AssertionError(f"{name}: без offload группа pin должен оставаться включён")
-    print("  ok: без group-offload pin остаётся включён (быстрый H2D на месте)")
+            raise AssertionError(f"{name}: ожидался offload без группы, получено {cfg.generation.offload!r}")
+        if cfg.encoder_pin_memory is not True:
+            raise AssertionError(f"{name}: без group-offload pin тоже должен быть включён")
+    print("  ok: без group-offload pin включён (offload его не касается)")
 
-    # Правило следует именно за offload, а не за именем пресета.
-    preview = RunConfig.from_profile("preview").merged(**{"generation.offload": "group"})
-    if preview.encoder_pin_memory:
-        raise AssertionError("pin не выключился при явном --set generation.offload=group")
-    print("  ok: правило зависит от generation.offload, а не от имени пресета")
+    # Выключает только явный флаг — и на group-, и на не-group-пресете.
+    for name in ("flagship-release-anime", "strong-preview"):
+        off = RunConfig.from_profile(name).merged(**{"encoder.pin_memory": "0"})
+        if off.encoder_pin_memory:
+            raise AssertionError(f"{name}: --set encoder.pin_memory=0 не выключил pin")
+    print("  ok: выключает только явный encoder.pin_memory=0")
+
+    # Правило не следует за offload: включение группы у не-group пресета pin не трогает.
+    for name in ("strong-preview", "preview-qwen"):
+        grp = RunConfig.from_profile(name).merged(**{"generation.offload": "group"})
+        if grp.generation.offload != "group" or grp.encoder_pin_memory is not True:
+            raise AssertionError(f"{name}: pin не должен зависеть от generation.offload")
+    print("  ok: pin не зависит от generation.offload")
 
 
 def main() -> int:
