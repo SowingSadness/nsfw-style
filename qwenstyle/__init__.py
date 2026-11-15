@@ -7,7 +7,7 @@
 остаётся дешёвым и не тянет torch/PIL, пока не вызван сам прогон.
 
 Запуск: `python -m qwenstyle <command>` (`run`, `batch`, `env`, `cache`, `models`,
-`compare-upscale`, `bench`, `check-parity`).
+`compare-upscale`, `bench`, `selftest`).
 """
 from __future__ import annotations
 

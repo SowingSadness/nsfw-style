@@ -42,7 +42,6 @@
     --set KEY=VALUE            -> точечный параметр RunConfig (повторяемый)
     --dry-run                  -> печать плана (crop, ключ кэша, нужен ли энкодер, шаги, фактор)
                                   без загрузки весов; exit 0
-    --check-parity [ENTRY]     -> сверить sha256 кадра с записью `tests/reference.json`
     --no-logs                  -> не создавать подпапку кадра с логом (`RunConfig.logs=False`)
 
 Логи (`qwenstyle/runlog.py`): каждый прогон пишет свой `run.log` и `meta.json` в папку кадра
@@ -85,7 +84,7 @@ from ..config import (
 from . import parse_sets
 
 NAME = "run"
-HELP = "одиночный кадр: все флаги run_style.py + --config/--set/--dry-run/--check-parity"
+HELP = "одиночный кадр: все флаги run_style.py + --config/--set/--dry-run"
 DEFAULT_CONFIG = "base"
 DEFAULT_OUT = "out/prison-school-style.png"
 DEFAULT_SEED = 20261113
@@ -129,16 +128,16 @@ def pick_preset(args: argparse.Namespace) -> str:
 
 
 def model_label(cfg: RunConfig) -> str:
-    """Метка семейства для `[profile]` и сопоставления с эталонами (`--check-parity auto`).
+    """Метка семейства для строки `[profile]`.
 
     Возвращает `base`, если прогон идёт на **той же** модели, что и профиль по умолчанию
     (Qwen-Image-2.1 + FUSAL R80): другой размер/шаги/апскейл — это всё ещё `base`, поэтому
-    `preview-qwen`, `full-qwen`, `qwen`, `anime` сопоставимы с эталонами `base-640-8`/`esrgan-x4`.
+    `preview-qwen`, `full-qwen`, `qwen`, `anime` печатаются как `base`.
     Всё остальное возвращается именем пресета: `turbo` (другой трансформер), а также FLUX.2-профили.
 
     Решается по конфигу, а не списком имён: новый пресет на базовой модели получает `base`
     автоматически, и его не надо регистрировать здесь (так был допущен баг: `preview` остался
-    в старом списке `BASE_PRESETS` после того, как стал FLUX.2, — авто-сверка подбирала чужой эталон).
+    в старом списке `BASE_PRESETS` после того, как стал FLUX.2, и печатался неверно).
     """
     preset = str(cfg.preset or DEFAULT_CONFIG)
     gen = cfg.generation
@@ -358,13 +357,7 @@ def _execute(args: argparse.Namespace, cfg: RunConfig, pipeline: Any) -> int:
     # Tee включается до первой печати: `[profile]`, `[size]` и `[in]` тоже входят в лог.
     with RunLog(cfg.logs) as log:
         print(_profile_line(cfg), flush=True)
-        result = pipeline.run(cfg, log=log)
-
-        wanted = getattr(args, "check_parity", None)
-        if wanted:
-            from . import parity
-
-            return parity.check_result(cfg, result, entry=str(wanted))
+        pipeline.run(cfg, log=log)
     return 0
 
 
@@ -459,13 +452,10 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                               "DreamFast/Qwen3-VL-8B-Heretic-1.3.0 (conditioning как в трейне LoRA, "
                               "другой ключ кэша!)")
 
-    checks = parser.add_argument_group("проверки без генерации / сверка с эталоном")
+    checks = parser.add_argument_group("проверки без генерации")
     checks.add_argument("--dry-run", action="store_true",
                         help="напечатать план (crop, ключ кэша, нужен ли энкодер, шаги, фактор) "
                              "и выйти, не загружая модель")
-    checks.add_argument("--check-parity", nargs="?", const="auto", default=None, metavar="ENTRY",
-                        help="после прогона сверить sha256 с эталоном tests/reference.json "
-                             "(имя записи или 'auto' — подобрать по параметрам)")
 
     logs = parser.add_argument_group("логи")
     logs.add_argument("--no-logs", dest="no_logs", action="store_true",

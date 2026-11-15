@@ -334,7 +334,7 @@ def build_config(args: argparse.Namespace) -> RunConfig:
         "generation.lora.scale": float(args.lora_scale),
     })
     # Замер не обслуживает кэш: даже если бы прогон писал эмбеддинги, вытеснять чужие записи
-    # он не должен (как и `check-parity`). `bench encoder` RunConfig вообще не строит и ничего
+    # он не должен. `bench encoder` RunConfig вообще не строит и ничего
     # не пишет в `cache/embeds/embeds_*`, так что у него вытеснять нечего by construction.
     overrides["cache_supersede"] = "none"
     if getattr(args, "offload", None):
