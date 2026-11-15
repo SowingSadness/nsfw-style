@@ -21,10 +21,11 @@
   * `crop` (`--size`/`--resolution`/`--aspect`) в вытеснении **не участвует**: разные разрешения
     и аспекты одного промта остаются все — иначе каждое переключение стоило бы 55–400 с энкода;
   * `legacy`-записи (без хеша картинки) в живую политику не входят (только `cache prune --legacy`);
-  * план пересчитывается в `flush()` по фактическому содержимому `cache/`, а не по снимку времён
+  * план пересчитывается в `flush()` по фактическому содержимому `cache/embeds/`, а не по снимку времён
     регистрации;
   * удаляет только `cache.delete_embeds` (её защиты пути/имени сохраняются), `.json` уезжает
     вместе с `.pt`;
+  * `cache/models/` (fp8-квантование и веса) не вытесняется никогда и не сканируется вовсе;
   * `apply=False` (`--dry-run`) печатает план и ничего не трогает; при исключении/прерывании
     прогона задача не исполняется — `flush` вызывается только в самом конце.
 
@@ -40,6 +41,7 @@ from .cache import (
     CACHE_DIR,
     EmbedsEntry,
     delete_embeds,
+    embeds_root,
     human_bytes,
     scan_embeds,
 )
@@ -150,14 +152,15 @@ def supersedes(write: CacheWrite, entry: EmbedsEntry, policy: SupersedePolicy) -
 
 
 class DeferredCleanup:
-    """Копит `CacheWrite`; план считает в момент вызова, по фактическому содержимому `cache/`.
+    """Копит `CacheWrite`; план считает в момент вызова, по фактическому содержимому `cache/embeds/`.
 
     Регистрация — сразу после успешной записи `.pt` (`pipeline._conditioning`), исполнение —
-    в самом конце прогона. Ни `register()`, ни `plan()` ничего не удаляют.
+    в самом конце прогона. Ни `register()`, ни `plan()` ничего не удаляют. Легаси-корень `cache`
+    разрешается в `cache/embeds` (`cache.embeds_root`), поэтому старые вызывающие не меняются.
     """
 
     def __init__(self, root: Path | str | None = None) -> None:
-        self.root = Path(root) if root is not None else Path(CACHE_DIR)
+        self.root = embeds_root(root) if root is not None else Path(CACHE_DIR)
         self._writes: list[CacheWrite] = []
 
     # -- состояние --------------------------------------------------------- #
@@ -182,7 +185,7 @@ class DeferredCleanup:
 
     def plan(self, policy: SupersedePolicy | str, root: Path | str | None = None,
              ) -> list[EmbedsEntry]:
-        """Что устарело **сейчас**: разбор `cache/` в момент вызова (не снимок на register)."""
+        """Что устарело **сейчас**: разбор `cache/embeds/` в момент вызова (не снимок на register)."""
         policy = normalize_policy(policy)
         if policy == "none" or not self._writes:
             return []
@@ -199,11 +202,11 @@ class DeferredCleanup:
         """Исполнить политику: `(удалено записей, освобождено байт)`.
 
         `apply=False` (`--dry-run`) печатает план и не трогает ни один файл. Удаление — только
-        `cache.delete_embeds`: она сама проверяет, что путь лежит прямо в `cache/` и имя —
-        `embeds_*.pt`, поэтому `cache/fp8_transformer*`, веса и чужие файлы не удаляются никогда.
+        `cache.delete_embeds`: она сама проверяет, что путь лежит прямо в `cache/embeds/` и имя —
+        `embeds_*.pt`, поэтому `cache/models/fp8_transformer*`, веса и чужие файлы не удаляются никогда.
         """
         policy = normalize_policy(policy)
-        cleanup_root = Path(root) if root is not None else self.root
+        cleanup_root = embeds_root(root) if root is not None else self.root
         if policy == "none" or not self._writes:
             return (0, 0)
 

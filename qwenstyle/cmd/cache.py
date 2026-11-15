@@ -7,8 +7,9 @@
   * по умолчанию на каждое разрешение внутри группы (промт + картинка + энкодер + dtype/device)
     остаётся один самый свежий кеш; `--group-by image` строже (один кеш на разрешение
     по картинке), `--keep-per-resolution N`, `--older-than 30d`, `--legacy`, `--all`;
-  * удаляются только `cache/embeds_*.pt` и их `.json`; `cache/fp8_transformer*`
-    и `cache/weights/*` не трогаются никогда.
+  * удаляются только `cache/embeds/embeds_*.pt` и их `.json`; `cache/models/` (fp8-квантование
+    и веса энкодеров/апскейлера) не сканируется и не трогается никогда — он пересобирается
+    только `--rebuild-fp8-cache`.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from ..cache import (
     plan_prune,
     scan_embeds,
 )
+from ..config import MODELS_DIR
 
 NAME = "cache"
 HELP = "обслуживание кэшей: list / show / prune (read-only по умолчанию)"
@@ -65,8 +67,12 @@ def cmd_list(args: argparse.Namespace) -> int:
                          ensure_ascii=False, indent=2, default=str))
         return 0
     if not entries:
-        print("[cache] пусто")
+        print(f"[cache] {CACHE_DIR.as_posix()}: пусто")
         return 0
+    print(f"[cache] {CACHE_DIR.as_posix()}: {len(entries)} записей, "
+          f"{human_bytes(sum(e.size for e in entries))}")
+    print(f"[cache] {MODELS_DIR.as_posix()}/ (fp8-кэш и веса) не вытесняется: "
+          f"пересборка только `--rebuild-fp8-cache`")
     print(f"{'файл':60} {'разм.':>9} {'возр.':>7}  {'сетка':>9}  "
           f"{'промт':12} {'картинка':12} {'энкодер':18} dtype/device")
     for e in entries:
@@ -174,7 +180,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
 
     p_list = actions.add_parser(
         "list", help="список записей кэша эмбеддингов",
-        description="Печатает найденные `cache/embeds_*.pt`; ничего не меняет.",
+        description="Печатает найденные `cache/embeds/embeds_*.pt`; ничего не меняет.",
         prog=f"{parser.prog} list",
     )
     p_list.add_argument("--resolution", type=int, default=None,
@@ -196,7 +202,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
 
     p_prune = actions.add_parser(
         "prune", help="план/удаление; по умолчанию 1 кеш на разрешение",
-        description="Без --apply только печатает план. Удаляются лишь embeds_*.pt и их .json.",
+        description="Без --apply только печатает план. Удаляются лишь `cache/embeds/embeds_*.pt` и их `.json`.",
         prog=f"{parser.prog} prune",
     )
     p_prune.add_argument("--keep-per-resolution", type=int, default=1,

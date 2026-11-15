@@ -561,7 +561,7 @@ def _load_transformer(cfg: Any, root: Path, *, fp8: bool) -> tuple[Any, Path | N
     if cache is None:
         raise RuntimeError(
             "generation.precision_cache пуст: каст 33B на каждом старте стоит 62 GiB чтения и "
-            "30.9 GiB записи — укажи каталог кэша (cache/fp8_transformer_h3_image)"
+            "30.9 GiB записи — укажи каталог кэша (cache/models/fp8_transformer_h3_image)"
         )
     if _rebuild_requested(cfg):
         print(f"[precision] пересборка запрошена, но кэш {cache} переиспользуется: удалять "
@@ -628,7 +628,7 @@ class MiniMaxH3ImageBackend:
     name: ClassVar[str] = "minimax_h3_image"
     #: Репозиторий пайплайна (`models probe <repo>` -> `generation_for_repo`).
     repos: ClassVar[tuple[str, ...]] = (DEFAULT_REPO,)
-    #: Этап кэша conditioning: эмбеддинги текста (`cache/text_embeds_<…>.pt`), картинки не кэшируются.
+    #: Этап кэша conditioning: эмбеддинги текста (`cache/embeds/text_embeds_<…>.pt`), картинки не кэшируются.
     cache_stage: ClassVar[str] = "text_embeds"
     caps: ClassVar[Capabilities] = Capabilities(
         conditioning="internal",          # packed-последовательность: текст + референсы + кадр

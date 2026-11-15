@@ -17,7 +17,7 @@
 
 Имя файла — `<stage>_<key>.<ext>`, сайдкар — `<stage>_<key>.json`. Ключ эмбеддингов
 (`RunConfig.embeds_key`) даёт `<md5>_<sha>[_te-<энкодер>][-<dtype>][-dev-<device>]_<W>x<H>`,
-поэтому запись остаётся буквально прежней: `cache/embeds_<md5>_<sha>_<W>x<H>.pt` (AGENTS.md, R1:
+поэтому запись остаётся буквально прежней: `cache/embeds/embeds_<md5>_<sha>_<W>x<H>.pt` (AGENTS.md, R1:
 формат менять нельзя). Сегменты dtype/device появляются только для неумолчаний (`bfloat16`/`cpu`).
 
 Инварианты:
@@ -26,8 +26,13 @@
   * битый `.pt` не роняет вызывающего: `get()` возвращает `None` и печатает предупреждение;
   * `torch` импортируется лениво — `cache list` и импорт `qwenstyle` не тянут 2 ГБ библиотек;
   * `scan_embeds`/`plan_prune`/`delete_embeds` — политика обслуживания 1:1 с `tools/cli.py`:
-    удаляются только `cache/embeds_*.pt` (+ их `.json`), `cache/fp8_transformer*` и
-    `cache/weights/*` не трогаются никогда.
+    удаляются только `cache/embeds/embeds_*.pt` (+ их `.json`), `cache/models/fp8_transformer*`,
+    `cache/models/weights/*` и чужие файлы не трогаются никогда.
+
+Раскладка кешей (шаг 4 публикации): `cache/embeds/` — вычисления (conditioning промта/картинок),
+`cache/models/` — веса и квантование. `BlobCache`/`scan_embeds`/`delete_embeds` работают только
+с первым; легаси-корень `cache` (его передаёт `pipeline.blob_cache`) разрешается в `cache/embeds`,
+поэтому ключ кэша и существующие записи остаются валидными — миграция это путь, а не математика.
 """
 from __future__ import annotations
 
@@ -41,13 +46,31 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .config import (
+    CACHE_ROOT,
     DEFAULT_ENCODER_DEVICE,
     DEFAULT_ENCODER_DTYPE,
+    EMBEDS_DIR,
+    MODELS_DIR,
     encoder_device_canon,
     encoder_dtype_canon,
 )
 
-CACHE_DIR = Path("cache")
+#: Корень кеша вычислений (эмбеддинги). Историческое имя: `BlobCache()` по умолчанию пишет сюда.
+CACHE_DIR = EMBEDS_DIR
+
+
+def embeds_root(root: Path | str | None = None) -> Path:
+    """Корень кеша вычислений: легаси-корень `cache` -> `cache/embeds` (миграция шага 4).
+
+    `pipeline.blob_cache()` исторически передаёт `cache`; переписывать его ради новой раскладки
+    не нужно — записи найдёт тот же вызов. Всё, что уже указывает на `cache/embeds` (или любой
+    другой каталог), возвращается как есть.
+    """
+    path = Path(root) if root is not None else Path(CACHE_DIR)
+    if path.name == CACHE_ROOT.name:            # `cache` -> `cache/embeds`, `.../cache` -> `.../cache/embeds`
+        return path / EMBEDS_DIR.name
+    return path
+
 
 # Этапы (stage), которые `BlobCache.list()` ищет в корне кэша. Новый этап кэша = добавить сюда.
 DEFAULT_STAGES: tuple[str, ...] = ("embeds", "text_embeds", "ref_latents")
@@ -107,10 +130,14 @@ class Blob:
 
 
 class BlobCache:
-    """Stage-кэш в одном каталоге: атомарная запись, опциональный `.json`-сайдкар."""
+    """Stage-кэш в одном каталоге: атомарная запись, опциональный `.json`-сайдкар.
+
+    `root` — каталог кеша вычислений: по умолчанию `cache/embeds`; легаси-корень `cache`
+    разрешается в `cache/embeds` (`embeds_root`), поэтому старые вызывающие не меняются.
+    """
 
     def __init__(self, root: Path | str = CACHE_DIR):
-        self.root = Path(root)
+        self.root = embeds_root(root)
 
     # -- пути ------------------------------------------------------------- #
 
@@ -210,7 +237,7 @@ class BlobCache:
         """Все записи известных этапов: `[(Blob, meta|None, size, mtime)]`.
 
         Сайдкары `.json`, `*.tmp` и всё, что не похоже на `<stage>_<key>.<ext>`, пропускается;
-        каталоги (`fp8_transformer*`, `weights/`) не читаются вовсе.
+        подкаталоги (`_stale/`) не читаются вовсе, а `cache/models/` лежит вне `root`.
         """
         if not self.root.is_dir():
             return []
@@ -245,7 +272,7 @@ class BlobCache:
 
 @dataclass
 class EmbedsEntry:
-    """Разобранная запись `cache/embeds_*.pt`."""
+    """Разобранная запись `cache/embeds/embeds_*.pt`."""
 
     path: Path
     size: int
@@ -296,8 +323,12 @@ class EmbedsEntry:
 
 
 def scan_embeds(root: Path | str = CACHE_DIR) -> list[EmbedsEntry]:
-    """Все `cache/embeds_*.pt`, подходящие под `EMBEDS_RE` (остальное игнорируется)."""
-    root = Path(root)
+    """Все `cache/embeds/embeds_*.pt`, подходящие под `EMBEDS_RE` (остальное игнорируется).
+
+    Легаси-корень `cache` разрешается в `cache/embeds` (`embeds_root`), а `cache/models`
+    не читается никогда: веса/квантование не вытесняются.
+    """
+    root = embeds_root(root)
     out: list[EmbedsEntry] = []
     if not root.is_dir():
         return out
@@ -361,10 +392,10 @@ def plan_prune(entries: Iterable[EmbedsEntry], *, keep_per_resolution: int = 1,
 def delete_embeds(entries: Iterable[EmbedsEntry], root: Path | str = CACHE_DIR) -> tuple[int, int]:
     """Удалить записи и их `.json`-сайдкары. Возвращает `(сколько, освобождено байт)`.
 
-    Защита: путь обязан лежать прямо в `root`, а имя — быть `embeds_*.pt`/`embeds_*.json`.
-    Всё остальное (fp8-кэш, веса, чужие файлы) не удаляется никогда.
+    Защита: путь обязан лежать прямо в `root` (по умолчанию `cache/embeds`), а имя — быть
+    `embeds_*.pt`/`embeds_*.json`. Всё остальное (fp8-кэш, веса, чужие файлы) не удаляется никогда.
     """
-    root = Path(root)
+    root = embeds_root(root)
     deleted = 0
     freed = 0
     for e in entries:
@@ -410,7 +441,7 @@ def parse_age(spec: str) -> float:
 
 
 __all__ = [
-    "Blob", "BlobCache", "CACHE_DIR", "DEFAULT_STAGES", "EMBEDS_RE",
-    "EmbedsEntry", "scan_embeds", "plan_prune", "delete_embeds",
-    "human_bytes", "parse_age",
+    "Blob", "BlobCache", "CACHE_DIR", "CACHE_ROOT", "DEFAULT_STAGES", "EMBEDS_DIR",
+    "EMBEDS_RE", "MODELS_DIR", "EmbedsEntry", "embeds_root",
+    "scan_embeds", "plan_prune", "delete_embeds", "human_bytes", "parse_age",
 ]

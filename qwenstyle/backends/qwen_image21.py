@@ -47,8 +47,9 @@ LORA_REPO = "MicksHF/Qwen-Image-2.1-Anime-Fusal"
 BASE_LORA = "fusal-qwen-image-2.1-v2-exact-r80.safetensors"
 TURBO_LORA = "fusal-qwen-image-2.1-turbo-e6-preview-r128.safetensors"
 
-#: Запасные пути fp8-кэша — как `PROFILES[...]["fp8_cache"]` в run_style.py (пресеты главнее).
-DEFAULT_FP8_CACHE = {"base": "cache/fp8_transformer", "turbo": "cache/fp8_transformer_turbo"}
+#: Запасные пути fp8-кэша (кеш моделей, шаг 4: `cache/models/...`); пресеты главнее.
+DEFAULT_FP8_CACHE = {"base": "cache/models/fp8_transformer",
+                     "turbo": "cache/models/fp8_transformer_turbo"}
 
 
 # --------------------------------------------------------------------------- #

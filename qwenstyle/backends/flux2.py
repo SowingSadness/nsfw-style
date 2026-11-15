@@ -84,7 +84,7 @@ from .base import REPO_ROOT, Capabilities, ResourceBudget, hardware_budget_verdi
 #: Репозиторий пайплайна (transformer + text-encoder + VAE + tokenizer). Веса НЕ скачаны.
 DEFAULT_REPO = "darknight9121/FLUX.2-klein-base-9B-bucket-uncensored"
 #: Запасной путь fp8-кэша, если пресет не задал `generation.precision_cache` (как у Qwen).
-DEFAULT_PRECISION_CACHE = "cache/fp8_transformer_flux2"
+DEFAULT_PRECISION_CACHE = "cache/models/fp8_transformer_flux2"
 #: Если `model_index.json` недоступен: считаем репозиторий обычным FLUX.2 (Flux2Pipeline + Mistral3).
 DEFAULT_PIPELINE = "Flux2Pipeline"
 #: Дефолты из исходников пайплайнов: `num_inference_steps=50`, `guidance_scale=4.0`.
@@ -428,7 +428,7 @@ def _load_text_encoder(cfg: Any, encoder_class: str) -> Any:
     model_class = _import_encoder(encoder_class)
     # В diffusers-репозиториях энкодер лежит в subfolder='text_encoder', а не в корне
     # (так у FLUX.2: text_encoder/model.safetensors). Для локального каталога-энкодера
-    # (например cache/weights/heretic-te) subfolder не нужен.
+    # (например cache/models/weights/heretic-te) subfolder не нужен.
     subfolder = None
     if not cfg.encoder.local_dir:
         try:
@@ -555,7 +555,7 @@ def _save_fp8_cache(pipe: Any, path: Path) -> None:
 def _load_lora(pipe: Any, cfg: Any) -> None:
     """LoRA через `Flux2LoraLoaderMixin` (`load_lora_weights` + `set_adapters`).
 
-    Адаптер берётся из `cache/weights/<filename>`, если он там уже есть, иначе
+    Адаптер берётся из `cache/models/weights/<filename>`, если он там уже есть, иначе
     `hf_hub_download` (в оффлайне — понятная ошибка, а не тихое «без LoRA»).
     """
     lora = getattr(cfg.generation, "lora", None)
@@ -565,7 +565,7 @@ def _load_lora(pipe: Any, cfg: Any) -> None:
     from huggingface_hub import hf_hub_download
     from safetensors.torch import load_file
 
-    local = Path("cache") / "weights" / lora.filename
+    local = Path("cache") / "models" / "weights" / lora.filename
     payload: Any
     if local.is_file():
         payload = load_file(str(local), device="cpu")
@@ -644,7 +644,7 @@ class Flux2Backend:
     name: ClassVar[str] = "flux2"
     #: Репозитории, которые обслуживает бекенд (для `models probe`).
     repos: ClassVar[tuple[str, ...]] = (DEFAULT_REPO,)
-    #: Этап кэша для `encode` (референсы не кэшируются): `cache/text_embeds_*.pt` + `.json`.
+    #: Этап кэша для `encode` (референсы не кэшируются): `cache/embeds/text_embeds_*.pt` + `.json`.
     cache_stage: ClassVar[str] = CACHE_STAGE
     caps: ClassVar[Capabilities] = Capabilities(
         conditioning="internal",
@@ -929,7 +929,7 @@ class Flux2Backend:
                         "flux2: в кэше нет negative_prompt_embeds, а CFG включён "
                         f"(guidance_scale={guidance}). Пересоздай кэш текстовых эмбеддингов "
                         "одним прогоном без кэша (например с другим --seed-тегом в имени "
-                        "или удалив cache/text_embeds_*.pt для этой пары)."
+                        "или удалив cache/embeds/text_embeds_*.pt для этой пары)."
                     )
                 kwargs["negative_prompt_embeds"] = negative.to(_pipeline_device(pipe))
         else:

@@ -6,7 +6,7 @@
 * пресеты (`qwenstyle/presets/*.yaml`) — только данные; `extends:` даёт deep-merge, без кода.
 * ключ кэша эмбеддингов строится ТОЛЬКО через `embeds_key()`/`cache_key_parts()` и обязан
   совпадать с историческим форматом `embeds_<md5>_<sha>[_te-<enc>][-<dtype>][-dev-<device>]_<W>x<H>.pt`
-  — иначе все существующие `cache/embeds_*.pt` станут мёртвыми (255 с CPU-энкода за промт).
+  — иначе все существующие `cache/embeds/embeds_*.pt` станут мёртвыми (255 с CPU-энкода за промт).
   Сегменты dtype/device есть только у неумолчаний (`bfloat16`/`cpu`), сами умолчания
   дают байт-в-байт прежнее имя.
 * `seed` и `lora.scale` в ключ НЕ входят: это бесплатные оси (AGENTS.md, §5.6/§6).
@@ -23,6 +23,14 @@ from typing import Any, Mapping
 from .io import NOREF_SHA, image_sha  # noqa: F401 — реэкспорт для существующих вызывающих
 
 PRESETS_DIR = Path(__file__).resolve().parent / "presets"
+
+# Раскладка кешей (пути относительны корня репозитория):
+#   cache/embeds/  — вычисления: conditioning промта/картинок (мелкое, вытесняется `cache prune`);
+#   cache/models/  — веса и квантование (fp8-трансформеры, веса энкодеров, ESRGAN).
+# Кеш моделей не вытесняется никогда: пересборка = `--rebuild-fp8-cache`.
+CACHE_ROOT = Path("cache")
+EMBEDS_DIR = CACHE_ROOT / "embeds"
+MODELS_DIR = CACHE_ROOT / "models"
 
 # Схема ключа кэша. Менять только вместе с миграцией содержимого cache/ (AGENTS.md, R1).
 CACHE_SCHEMA = "qwenstyle-1"
@@ -46,6 +54,34 @@ DEFAULT_CACHE_SUPERSEDE = "pair"
 
 class ConfigError(ValueError):
     """Некорректный пресет, неизвестный путь в `--set` или несовместимое значение."""
+
+
+def models_path(raw: str | Path | None) -> str | None:
+    """Канонический путь кеша моделей: легаси `cache/<x>` -> `cache/models/<x>`.
+
+    Данные пресетов миграцией шага 4 не переписываются: старые значения
+    (`cache/fp8_transformer`, `cache/weights/heretic-te`, …) разрешаются в новое место
+    (`cache/models/...`), поэтому существующие fp8-кэши и веса находятся без пересборки.
+    Каноничные пути (`cache/models/...`, `cache/embeds/...`) и любые пути вне `cache/`
+    (абсолютные, `~`, относительные от cwd) возвращаются как есть — но всегда `str`.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return text                             # '' = «не кэшировать», а не None
+    parts = Path(text).expanduser().parts
+    # Берём последний сегмент `cache`: работает и для относительного пути от корня репозитория,
+    # и для абсолютного `<repo>/cache/<x>`.
+    for idx in range(len(parts) - 1, -1, -1):
+        if parts[idx] != CACHE_ROOT.name:
+            continue
+        tail = parts[idx + 1:]
+        if not tail or tail[0] in (MODELS_DIR.name, EMBEDS_DIR.name):
+            return text
+        # as_posix(): путь попадает в config show/логи и не должен менять '/' на '\\'
+        return (Path(*parts[: idx + 1]) / MODELS_DIR.name / Path(*tail)).as_posix()
+    return text
 
 
 # --------------------------------------------------------------------------- #
@@ -151,7 +187,7 @@ def _set_path(target: dict[str, Any], path: str, value: Any) -> None:
 # --------------------------------------------------------------------------- #
 
 #: Канонические умолчания энкодера: для них в имени файла кэша НЕ появляется сегмент
-#: (иначе все существующие `cache/embeds_*.pt` стали бы мёртвыми — AGENTS.md R1).
+#: (иначе все существующие `cache/embeds/embeds_*.pt` стали бы мёртвыми — AGENTS.md R1).
 DEFAULT_ENCODER_DTYPE = "bfloat16"
 #: Канон «cpu» — именно он не добавляет `-dev-…` в имя записи (легаси-записи остаются валидными).
 DEFAULT_ENCODER_DEVICE = "cpu"
@@ -575,7 +611,7 @@ class RunConfig:
         return f"embeds_{prompt_md5}_{img_sha}{self.encoder.key_suffix}_{width}x{height}.pt"
 
     def embeds_path(self, crop: tuple[int, int], prompt_md5: str, img_sha: str,
-                    cache_dir: str | Path = "cache") -> Path:
+                    cache_dir: str | Path = EMBEDS_DIR) -> Path:
         return Path(cache_dir) / self.embeds_key(crop, prompt_md5, img_sha)
 
 
@@ -604,7 +640,17 @@ def _build_run_config(data: Mapping[str, Any], touched: set[str] | None = None) 
                 f"получено {transformer!r}"
             )
         generation_raw["transformer"] = (repo.strip(), sub.strip())
+    upscale_raw = dict(data.get("upscale") or {})
+    # Пути кеша моделей приводятся к новой раскладке (`cache/models/...`) в одном месте:
+    # пресеты и CLI могут по-прежнему писать `cache/fp8_transformer`/`cache/weights/...`.
+    for container, key in ((generation_raw, "precision_cache"),
+                           (encoder_raw, "local_dir"),
+                           (upscale_raw, "weights")):
+        if key in container:
+            container[key] = models_path(container[key])
     data["generation"] = generation_raw
+    data["encoder"] = encoder_raw
+    data["upscale"] = upscale_raw
     cfg = _build_dataclass(RunConfig, data, "config")
     # Политика вытеснения: единственное место, где `--set cache_supersede=…` проверяется.
     # `--set cache_supersede=none` приходит как None (`_coerce`): это явная политика `none`,
@@ -690,7 +736,7 @@ __all__ = [
     "AUTO_ENCODER_DEVICE", "AUTO_ENCODER_PREFETCH", "auto_encoder_device",
     "DEFAULT_CACHE_SUPERSEDE", "EncoderConfig", "GenerationConfig",
     "DEFAULT_ENCODER_DEVICE", "DEFAULT_ENCODER_DTYPE", "encoder_device_canon",
-    "encoder_dtype_canon",
+    "encoder_dtype_canon", "EMBEDS_DIR", "MODELS_DIR", "CACHE_ROOT", "models_path",
     "LoraConfig", "NOREF_SHA", "RunConfig", "UpscaleConfig", "available_presets", "image_sha",
     "load_profile", "load_prompt", "preset_path", "prompt_md5",
 ]

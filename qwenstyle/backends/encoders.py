@@ -43,7 +43,7 @@ _DTYPES: dict[str, str | None] = {
 }
 #: Файлы весов в локальном каталоге (D7: 4 шарда `model-0000N-of-00004.safetensors`).
 _WEIGHTS_GLOBS = ("model-*.safetensors", "model.safetensors")
-#: Ключи `.pt`-кэша эмбеддингов (формат cache/embeds_*.pt, см. qwenstyle/cache.py).
+#: Ключи `.pt`-кэша эмбеддингов (формат cache/embeds/embeds_*.pt, см. qwenstyle/cache.py).
 _EMBED_KEYS = ("embeds", "mask", "img_mask")
 
 #: Сигнатура пользовательского кодировщика: `encode_fn(handle, prompt, image) -> dict`.
@@ -294,7 +294,7 @@ class _Qwen3VlEncoder:
 
         Кодирование промта и картинки не работа этого класса: процессором/токенизатором владеет
         пайплайн генерации (`qwen_image21.py`), он же подменяет `pipe.encode_prompt` и пишет
-        `cache/embeds_*.pt`. Второй путь кодирования разошёлся бы с ним (другой prompt template
+        `cache/embeds/embeds_*.pt`. Второй путь кодирования разошёлся бы с ним (другой prompt template
         или `img_mask`) и испортил бы кэш при одинаковом имени файла. Поэтому здесь либо явный
         `encode_fn(handle, prompt, image)` от вызывающего (переиспользует уже загруженный handle),
         либо честная ошибка с объяснением, где кодирование живёт.
@@ -315,7 +315,7 @@ class _Qwen3VlEncoder:
         missing = [key for key in _EMBED_KEYS if key not in payload]
         if missing:
             raise ValueError(f"encode_fn вернул dict без ключей {', '.join(missing)} "
-                             f"(формат cache/embeds_*.pt: {', '.join(_EMBED_KEYS)})")
+                             f"(формат cache/embeds/embeds_*.pt: {', '.join(_EMBED_KEYS)})")
         return dict(payload)
 
 
@@ -342,7 +342,7 @@ class HereticEncoder(_Qwen3VlEncoder):
     """Abliterated Qwen3-VL-8B Heretic-1.3.0 — conditioning как в трейне LoRA (AGENTS.md D7).
 
     Отличается от штатного MLP `down_proj` слоёв 15 и 30; processor/tokenizer берутся базовые —
-    так предписывает карточка LoRA. Веса лежат в `cache/weights/heretic-te` (16.7 GiB, 4 шарда).
+    так предписывает карточка LoRA. Веса лежат в `cache/models/weights/heretic-te` (16.7 GiB, 4 шарда).
     """
 
     name = "heretic"
@@ -351,7 +351,7 @@ class HereticEncoder(_Qwen3VlEncoder):
     repos = ("DreamFast/Qwen3-VL-8B-Heretic-1.3.0",)
     repo = "DreamFast/Qwen3-VL-8B-Heretic-1.3.0"
     revision = "28dc0129b4c7c16304bc2ed3697c9437ae8ac2f3"
-    local_dir = "cache/weights/heretic-te"
+    local_dir = "cache/models/weights/heretic-te"
     local_weights = True             # веса только в local_dir; repo — лишь подсказка для скачивания
     memory_gib = 16.7
     notes = "только локальные веса (D7); processor/tokenizer — базовые"
@@ -371,7 +371,7 @@ class H3HereticEncoder(_Qwen3VlEncoder):
     dtype и device — общий код `_Qwen3VlEncoder.load()`; processor/tokenizer для H3-Image берутся
     из его собственного репозитория (их держит пайплайн), здесь только веса.
 
-    Почему веса читаются из `cache/weights/h3qwen32-heretic`, а не из `hf-cache` напрямую
+    Почему веса читаются из `cache/models/weights/h3qwen32-heretic`, а не из `hf-cache` напрямую
     (как heretic-8B, D7): в hf-cache лежит шард `model-00001-of-00002.safetensors` на **46.5 GiB**,
     а `safetensors` 0.8.0 (последняя версия) на Windows падает с access violation на любом
     `get_tensor` из файла ≥ ~40 GiB (проверено синтетической разрежённой матрицей: 39 GiB — ок,
@@ -386,7 +386,7 @@ class H3HereticEncoder(_Qwen3VlEncoder):
     repos = ("llmfan46/Qwen3-VL-32B-Instruct-ultra-uncensored-heretic",)
     repo = "llmfan46/Qwen3-VL-32B-Instruct-ultra-uncensored-heretic"
     revision = "c44b949b30d111666a5ed9851c5cd633ed39b070"
-    local_dir = "cache/weights/h3qwen32-heretic"   # пересобранные шарды < 40 GiB (см. выше)
+    local_dir = "cache/models/weights/h3qwen32-heretic"   # пересобранные шарды < 40 GiB (см. выше)
     local_weights = True             # веса только в local_dir; repo/revision — для текста ошибки
     memory_gib = 62.1
     notes = ("Qwen3VLForConditionalGeneration 32B, hidden 5120, 64 слоя; 62.1 GiB bf16 "

@@ -36,10 +36,10 @@ page cache); H2D копируется на GPU блоками `--chunk-mib` pinn
         -m qwenstyle bench vram --resolution 1024 --tag maxsplit
     .venv/Scripts/python.exe -m qwenstyle bench encoder \\
         --repo darknight9121/FLUX.2-klein-base-9B-bucket-uncensored --subfolder text_encoder \\
-        --tokens 8 --stream 0 --save cache/_bench/te_full.pt
+        --tokens 8 --stream 0 --save cache/models/_bench/te_full.pt
     .venv/Scripts/python.exe -m qwenstyle bench encoder \\
         --repo darknight9121/FLUX.2-klein-base-9B-bucket-uncensored --subfolder text_encoder \\
-        --tokens 8 --stream 1 --compare cache/_bench/te_full.pt
+        --tokens 8 --stream 1 --compare cache/models/_bench/te_full.pt
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle bench encoder \\
         --repo darknight9121/FLUX.2-klein-base-9B-bucket-uncensored --subfolder text_encoder \\
         --tokens 8 --stream 1 --device cuda --prefetch 4 --lookahead 1
@@ -58,7 +58,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..config import DEFAULT_STEPS, PREVIEW_STEPS, RunConfig, available_presets
+from ..config import DEFAULT_STEPS, EMBEDS_DIR, PREVIEW_STEPS, RunConfig, available_presets
 from . import parse_sets
 
 NAME = "bench"
@@ -296,8 +296,8 @@ def _install_hooks(pipe: Any, meta: dict[str, Any]) -> None:
 # Кэш эмбеддингов: поиск по картинке и сетке (как find_embeds в measure_vram.py)
 # --------------------------------------------------------------------------- #
 
-def find_embeds(image_sha: str, crop: tuple[int, int], root: str | Path = "cache") -> Any:
-    """Самая свежая запись `cache/embeds_*<sha>_<W>x<H>.pt` без тега энкодера.
+def find_embeds(image_sha: str, crop: tuple[int, int], root: str | Path = EMBEDS_DIR) -> Any:
+    """Самая свежая запись `cache/embeds/embeds_*<sha>_<W>x<H>.pt` без тега энкодера.
 
     Возвращает `(Blob, payload)` или `(None, None)`: промт в поиске не участвует (bench не
     принимает `--prompt-file`), поэтому берётся базовый энкодер и именно эта сетка.
@@ -335,7 +335,7 @@ def build_config(args: argparse.Namespace) -> RunConfig:
     })
     # Замер не обслуживает кэш: даже если бы прогон писал эмбеддинги, вытеснять чужие записи
     # он не должен (как и `check-parity`). `bench encoder` RunConfig вообще не строит и ничего
-    # не пишет в `cache/embeds_*`, так что у него вытеснять нечего by construction.
+    # не пишет в `cache/embeds/embeds_*`, так что у него вытеснять нечего by construction.
     overrides["cache_supersede"] = "none"
     if getattr(args, "offload", None):
         overrides["generation.offload"] = str(args.offload)
@@ -1004,7 +1004,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
         "vram",
         help="пик VRAM/RSS по фазам на реальном прогоне (эмбеддинги только из кэша)",
         description="Пайплайн грузится тем же backend.prepare(), что и обычный run; "
-                    "эмбеддинги берутся из cache/ (CPU-энкод не платится).",
+                    "эмбеддинги берутся из cache/embeds/ (CPU-энкод не платится).",
         prog=f"{parser.prog} vram",
     )
     vram.add_argument("--input", required=True, metavar="PATH",
