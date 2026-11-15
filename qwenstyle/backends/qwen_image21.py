@@ -17,15 +17,19 @@ LoRA-тензоров (fp8 `addmm` не реализован), `enable_group_off
 внутри функций: `discover()`/`models list` не должны тянуть 2 ГБ библиотек, а импорт модуля не
 должен падать на машине без CUDA.
 
-Два ключа `generation.sampler_kwargs` — не про сэмплер, а про эту модель (в `RunConfig` нет
+Три ключа `generation.sampler_kwargs` — не про сэмплер, а про эту модель (в `RunConfig` нет
 отдельных полей, а `cache_key_parts()` смотрит только на `CACHE_SAMPLER_KEYS`, поэтому ключ
 эмбеддингов они не меняют):
 
 * `offload_blocks` (по умолчанию 1) и `offload_stream` (1) — параметры `enable_group_offload`;
 * `rebuild_precision_cache` (он же `rebuild_fp8_cache`) — эквивалент `--rebuild-fp8-cache`
-  из `run_style.py`: пересобрать fp8-кэш вместо чтения готового.
+  из `run_style.py`: пересобрать fp8-кэш вместо чтения готового;
+* `kv_cache` (`true`|`false`|`offload`) — где живёт префиксный KV-кеш трансформера (текст +
+  все референсы, считается на шаге 0 и стоит ~512 КиБ VRAM на токен): `true` — в VRAM
+  (как раньше), `offload` — в RAM с послойной подкачкой (`qwen_kv.install_offload`, бит-в-бит),
+  `false` — без кеша (префикс пересчитывается каждый шаг).
 
-Оба объявлены в `parameters()` вместе с `steps`/`guidance`/`offload`/`precision`/`max_images`:
+Всё это объявлено в `parameters()` вместе с `steps`/`guidance`/`offload`/`precision`/`max_images`:
 это единственный источник, по которому ядро проверяет `--set` и печатает `--explain-params`.
 """
 from __future__ import annotations
@@ -38,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
-from ..config import encoder_device_canon
+from ..config import ConfigError, encoder_device_canon
 from ..registry import register_generation
 from .base import REPO_ROOT, Capabilities, ParameterSpec, ResourceBudget, as_image_list
 
@@ -105,6 +109,29 @@ def _sampler_int(cfg: Any, key: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _kv_cache_mode(cfg: Any) -> str:
+    """Режим префиксного KV-кеша (`generation.sampler_kwargs.kv_cache`) -> `true|false|offload`.
+
+    Значение приходит строкой из `--set`/пресета или bool'ом из `_coerce` ядра, поэтому
+    нормализуются регистр и `1|0|on|off|yes|no`; пустое = умолчание `true` (прежнее поведение).
+    Неизвестное значение — `ValueError` с перечнем допустимых (страховка поверх валидации ядра:
+    тот же текст печатается без трейсбека, `cmd/run.py` ловит `ValueError` -> exit 2).
+    """
+    raw = _sampler_kwarg(cfg, "kv_cache", "true")
+    if isinstance(raw, bool):
+        return "true" if raw else "false"
+    value = str(raw).strip().lower()
+    aliases = {"1": "true", "on": "true", "yes": "true",
+               "0": "false", "off": "false", "no": "false", "": "true"}
+    value = aliases.get(value, value)
+    if value not in ("true", "false", "offload"):
+        raise ValueError(
+            f"generation.sampler_kwargs.kv_cache: неизвестное значение {raw!r}; "
+            f"допустимо true|false|offload"
+        )
+    return value
 
 
 def _rebuild_requested(cfg: Any) -> bool:
@@ -450,6 +477,12 @@ class QwenImage21Backend:
                           doc="блоков трансформера на GPU одновременно (offload=group)"),
             ParameterSpec("offload_stream", "sampler", "bool", True,
                           doc="асинхронная префетч-загрузка блоков (offload=group)"),
+            ParameterSpec("kv_cache", "sampler", "enum", "true",
+                          choices=("true", "false", "offload"),
+                          doc="префиксный KV-кеш (текст + референсы, кешируется на шаге 0): "
+                              "true = в VRAM (быстро), offload = в RAM с послойной подкачкой "
+                              "(меньше VRAM, бит-в-бит), false = без кеша (префикс пересчитывается "
+                              "каждый шаг)"),
             ParameterSpec("rebuild_precision_cache", "sampler", "bool", False,
                           doc="пересобрать fp8-кэш вместо чтения готового"),
             ParameterSpec("rebuild_fp8_cache", "sampler", "bool", False,
@@ -469,6 +502,14 @@ class QwenImage21Backend:
         при `cuda` штатный Qwen3VL-8B не попадает в `from_pretrained` (там его грузил бы diffusers —
         17.5 ГБ в RAM и CPU-энкод), а собирается нашим стримингом после размещения трансформера.
         """
+        # `kv_cache` проверяется до torch/diffusers и до fp8-кэша: опечатка в `--set` должна стоить
+        # <1 с и одного текста (`exit 2`), а не трейсбека после загрузки 6.7 ГиБ. Ядро сегодня
+        # валидирует только *имена* ключей `sampler_kwargs`, значения — на бекенде.
+        try:
+            _kv_cache_mode(cfg)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from None
+
         torch = _torch()
         from dataclasses import replace as _replace
 
@@ -782,6 +823,10 @@ class QwenImage21Backend:
         уходит списком только при >1: `__call__` для одной картинки ведёт себя как раньше, а для
         списка считает латенты по каждому референсу (`prepare_latents(vae_images)`) и склеивает
         их перед латентами кадра.
+
+        `generation.sampler_kwargs.kv_cache` — раскладка префиксного KV-кеша (текст + все
+        референсы, считается один раз на шаге 0): `true` — в VRAM (по умолчанию, как раньше),
+        `offload` — в RAM с послойной подкачкой (`qwen_kv.install_offload`), `false` — без кеша.
         """
         torch = _torch()
         images = as_image_list(image)
@@ -807,24 +852,40 @@ class QwenImage21Backend:
 
         handle.pipe.encode_prompt = cached_encode_prompt
 
+        # Префиксный KV-кеш: `offload` держит K/V в RAM и подкачивает послойно (патч класса кеша,
+        # снимается в `finally`), `false` считает префикс заново каждый шаг, `true` — как раньше.
+        kv_mode = _kv_cache_mode(cfg)
         steps = int(handle.steps)
         refs = f", референсов {len(input_images)}" if len(input_images) > 1 else ""
         print(f"[5/5] генерация: {steps} шагов @ res {resolution}{refs}"
-              f"{' (preview)' if cfg.is_preview else ''}", flush=True)
+              f"{' (preview)' if cfg.is_preview else ''}, kv_cache={kv_mode}", flush=True)
         started = time.time()
-        with torch.inference_mode():
-            result = handle.pipe(
-                prompt=None,
-                prompt_embeds=prompt_embeds,
-                prompt_embeds_mask=prompt_embeds_mask,
-                image=input_images[0] if len(input_images) == 1 else input_images,
-                height=crop_h,
-                width=crop_w,
-                num_inference_steps=steps,
-                true_cfg_scale=float(cfg.generation.guidance or 1.0),
-                output_resolution=resolution,
-                generator=torch.Generator("cpu").manual_seed(int(seed)),
-            ).images[0]
+        if kv_mode == "offload":
+            from .qwen_kv import install_offload
+
+            if not install_offload():
+                print("    [kv] offload не включён — префиксный KV-кеш остаётся в VRAM",
+                      flush=True)
+        try:
+            with torch.inference_mode():
+                result = handle.pipe(
+                    prompt=None,
+                    prompt_embeds=prompt_embeds,
+                    prompt_embeds_mask=prompt_embeds_mask,
+                    image=input_images[0] if len(input_images) == 1 else input_images,
+                    height=crop_h,
+                    width=crop_w,
+                    num_inference_steps=steps,
+                    true_cfg_scale=float(cfg.generation.guidance or 1.0),
+                    output_resolution=resolution,
+                    generator=torch.Generator("cpu").manual_seed(int(seed)),
+                    use_kv_cache=(kv_mode != "false"),
+                ).images[0]
+        finally:
+            # Патч живёт в процессе глобально: без снятия режим утёк бы в следующий seed/прогон.
+            from .qwen_kv import uninstall
+
+            uninstall()
         print(f"    ok, {time.time() - started:.0f}s", flush=True)
         return result
 
