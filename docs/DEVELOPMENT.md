@@ -93,6 +93,13 @@ cache/
 - Новый замер, меняющий выводы, обновляет `docs/bench/presets.md` **и** §4 в `AGENTS.md`, а не
   остаётся в переписке.
 
+### Память энкодера: `pin_memory` и `offload=group`
+
+`pin_memory` включён по умолчанию **и при `generation.offload=group`**: `RunConfig.encoder_pin_memory`
+читает только поле `encoder.pin_memory`, поэтому выключить его можно исключительно явно
+(`--set encoder.pin_memory=0`). При неудаче pinned-аллокации `_PinnedPool` деградирует до pageable RAM
+(результат **бит-в-бит**, медленнее только H2D) и печатает причину — это страховка, а не штатный режим.
+
 ## 6. История миграции
 
 | шаг | что сделано |
