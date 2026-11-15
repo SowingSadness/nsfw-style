@@ -601,23 +601,15 @@ class RunConfig:
 
     @property
     def encoder_pin_memory(self) -> bool:
-        """Pinned staging энкодера с учётом уже занятой pinned-памяти (`offload=group`).
+        """Pinned staging энкодера: ровно `encoder.pin_memory`, без поправок на offload.
 
-        На Windows pinned-память CUDA — это блокировка страниц **и** маппинг в адресное
-        пространство GPU (WDDM), то есть те же ресурсы, что тратит VRAM. Групповой offload
-        держит в ней 6.6–8.5 ГиБ весов fp8-трансформера, после чего первый же крупный
-        staging-буфер энкодера (`embed_tokens` 1.16 ГиБ) падал `CUDA error: out of memory`
-        при совершенно свободной VRAM, а следом умирал и CUDA-контекст
-        (`shared object initialization failed`) — прогон терялся целиком.
-
-        Выигрыш pin на этом профиле — 1.3× на H2D, то есть 0.05–0.31 s из 8–10 s энкода
-        (AGENTS.md §4), поэтому при `offload=group` пиннинг отключается **принудительно**:
-        поле `encoder.pin_memory` и `--set` его не включают обратно. Цена ошибки — упавший
-        прогон, цена отказа — доли секунды.
+        Pin — это транспорт (скорость копирования H2D), а не математика: результат бит-в-бит
+        от него не зависит и ключ кэша эмбеддингов не меняется. Поэтому он включён по умолчанию
+        **и при `offload=group`**, а выключает его только явное `encoder.pin_memory: false`
+        (`--set encoder.pin_memory=0`). Если pinned-аллокация всё-таки не удалась (чужая машина,
+        WDDM), `streaming._PinnedPool` деградирует до pageable RAM, печатает причину и
+        продолжает — кадр от этого не меняется.
         """
-        offload = str(getattr(self.generation, "offload", "") or "").strip().lower()
-        if offload == "group":
-            return False
         return bool(getattr(self.encoder, "pin_memory", True))
 
     @property

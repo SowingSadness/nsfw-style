@@ -418,13 +418,13 @@ def _load_text_encoder(cfg: Any, encoder_class: str) -> Any:
     stream = bool(getattr(enc, "stream", False) or False)
     # параметры конвейера стриминга (нет в старых пресетах -> безопасные умолчания)
     prefetch = int(getattr(enc, "prefetch", 0) or 0)
-    # `cfg.encoder_pin_memory` гасит pin при `offload=group`: там pinned-память уже занята
-    # весами трансформера, а Windows тратит на неё те же ресурсы, что и на VRAM.
+    # `cfg.encoder_pin_memory` — это уже разрешённое поле `encoder.pin_memory`: pin включён
+    # и при `offload=group`, а упавшая pinned-аллокация деградирует в `streaming._PinnedPool`.
     pin_memory = bool(getattr(cfg, "encoder_pin_memory", getattr(enc, "pin_memory", True)))
     lookahead = int(getattr(enc, "lookahead", 1) or 1)
-    if pin_memory != bool(getattr(enc, "pin_memory", True)):
-        print(f"[te] энкодер {cfg.encoder.name}: pin_memory выключен — pinned-память занята "
-              f"весами трансформера (offload group), на Windows это один ресурс", flush=True)
+    if not pin_memory:
+        print(f"[te] энкодер {cfg.encoder.name}: pin_memory отключён пользователем "
+              f"(encoder.pin_memory=false)", flush=True)
     model_class = _import_encoder(encoder_class)
     # В diffusers-репозиториях энкодер лежит в subfolder='text_encoder', а не в корне
     # (так у FLUX.2: text_encoder/model.safetensors). Для локального каталога-энкодера

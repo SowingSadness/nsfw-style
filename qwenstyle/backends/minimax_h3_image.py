@@ -362,34 +362,6 @@ def _encoder_unregistered_message(cfg: Any) -> str:
     )
 
 
-class _PinnedEncoderConfig:
-    """Прокси `RunConfig`, в котором `encoder_pin_memory` — не принудительный `False`.
-
-    `RunConfig.encoder_pin_memory` выключает pinned-staging энкодера **всегда** при
-    `generation.offload=group`: в pinned-память ложатся 30.9 GiB fp8-весов трансформера, а на
-    Windows это тот же ресурс, что VRAM (AGENTS.md §4). В отложенном пути (`_prepare_for_encode`)
-    трансформера в памяти ещё нет, а стриминг 62.1 GiB 32B-энкодера **без** pinned-staging на этой
-    машине падает с `Windows fatal exception: access violation` в продюсере
-    (`safetensors.get_tensor`, traceback — `streaming.py:470 __getitem__`, exit 0xC0000005):
-    неблокирующая копия H2D из pageable-памяти живёт дольше своего буфера. Замер на 218 токенах:
-    `pin=0` — падение через ~40 s, `pin=1` — encode **122 s** и `prompt_embeds (1, 218, 5120)`.
-
-    Прокси, а не правка `config.py`/`encoders.py`: правило шага — чинить только в этом файле, а
-    `RunConfig` не должен знать, что бекенд грузит энкодер раньше трансформера.
-    """
-
-    def __init__(self, cfg: Any) -> None:
-        object.__setattr__(self, "_cfg", cfg)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(object.__getattribute__(self, "_cfg"), name)
-
-    @property
-    def encoder_pin_memory(self) -> bool:
-        """Явное `encoder.pin_memory` пресета (по умолчанию `True`), без поправки на offload."""
-        return bool(getattr(self._cfg.encoder, "pin_memory", True))
-
-
 def _is_encode_child() -> bool:
     """Этот процесс — рабочий фазы `[3/4]` (запущен `_encode_in_child`)? """
     return os.environ.get(ENCODE_CHILD_ENV, "").strip() not in ("", "0")
@@ -753,9 +725,9 @@ class MiniMaxH3ImageBackend:
                 return handle
             # Дочерний процесс: собираем энкодер ровно так, как это делал in-process путь.
             text_parts = _load_text_components(root)
-            # pinned-staging включается явно (прокси): трансформера с group-offload в памяти
-            # ещё нет, а без pin стриминг 32B падает access violation (см. `_PinnedEncoderConfig`).
-            text_encoder = _load_text_encoder(_PinnedEncoderConfig(cfg))
+            # `cfg` идёт как есть: `encoder_pin_memory` — это поле `encoder.pin_memory`
+            # (pinned-staging включён и при `offload=group`), деградация — в `streaming._PinnedPool`.
+            text_encoder = _load_text_encoder(cfg)
             encode_pipe = _modular_pipeline(ENCODE_BLOCKS)
             encode_pipe.register_components(text_encoder=text_encoder, **text_parts)
             from .. import streaming

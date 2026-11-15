@@ -232,13 +232,13 @@ class _Qwen3VlEncoder:
             enc = resolved()
         stream = bool(_pick(enc, "stream", False))
         prefetch = int(_pick(enc, "prefetch", 0) or 0)
-        # `cfg.encoder_pin_memory` учитывает `offload=group`: pinned-память там уже занята
-        # (Windows считает её тем же ресурсом, что VRAM) — см. `RunConfig.encoder_pin_memory`.
+        # `cfg.encoder_pin_memory` — это уже разрешённое поле `encoder.pin_memory` (pin включён
+        # и при `offload=group`); страховка от упавшей аллокации живёт в `streaming._PinnedPool`.
         pin_memory = bool(getattr(cfg, "encoder_pin_memory", _pick(enc, "pin_memory", True)))
         lookahead = int(_pick(enc, "lookahead", 1) or 1)
-        if pin_memory != bool(_pick(enc, "pin_memory", True)):
-            print(f"[te] {self.name}: pin_memory выключен — pinned-память занята весами "
-                  f"трансформера (offload group), на Windows это один ресурс", flush=True)
+        if not pin_memory:
+            print(f"[te] {self.name}: pin_memory отключён пользователем "
+                  f"(encoder.pin_memory=false)", flush=True)
         if src.device != "cpu" and not stream:
             print(f"[te] {self.name}: device={src.device} -> включаю стриминг весов "
                   f"(без него энкодер не влезает в RAM/VRAM целиком)", flush=True)
