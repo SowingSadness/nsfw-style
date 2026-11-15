@@ -1,0 +1,25 @@
+# weak-release: 8 GB VRAM / 16 GB RAM — финальный кадр на Turbo (8 шагов расписания).
+# Рендер 640p native (1152x640 при 16:9), дальше ESRGAN x1.6875 до 1080p: 1080 / 640.
+# Выше 640p на 8 ГиБ VRAM не поднять (768p уже требует 15.5 ГиБ без offload), поэтому разрешение
+# добирает апскейлер, а не модель. Энкодер heretic — CPU + диск-стриминг, трансформер — group.
+extends: turbo
+
+encoder:
+  name: heretic
+  cache_tag: heretic
+  device: cpu
+  stream: true
+  prefetch: 4
+
+generation:
+  offload: group
+  precision_cache: cache/models/fp8_transformer_turbo
+  sampler_kwargs:
+    offload_blocks: 1
+
+size_px: 640              # 640p: 1152x640 при 16:9
+
+upscale:
+  backend: esrgan
+  factor: 0               # фактор считается из target_height: 1080 / 640 = 1.6875
+  target_height: 1080     # целевой кадр weak-профиля (~1944x1080 при 16:9)

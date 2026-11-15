@@ -1,0 +1,29 @@
+# flagship-preview-anime: 16 GB VRAM / 64 GB RAM — черновик 768p + FUSAL 0.7, 8 шагов.
+# Та же сетка, что у `flagship-preview` (1376x768 при 16:9), но адаптер включён: на черновике
+# подбирают силу LoRA (0.7 — рабочий диапазон, AGENTS.md §5.6), не платя за 1440p.
+# Цепочка: 768p native -> (апскейла нет, factor 0) -> 1376x768 черновик.
+# Энкодер heretic — `auto` (GPU + конвейер стриминга на CUDA).
+extends: base
+
+encoder:
+  name: heretic
+  cache_tag: heretic
+  device: auto
+  stream: true
+  prefetch: 4
+
+generation:
+  steps: 8
+  offload: none           # 768p влезает без offload (пик 15.5 ГиБ)
+  precision_cache: cache/models/fp8_transformer
+  sampler_kwargs:
+    offload_blocks: 1
+  lora:
+    scale: 0.7
+
+size_px: 768              # 768p: 1376x768 при 16:9
+
+upscale:
+  backend: esrgan
+  factor: 0
+  target_height: 0        # черновик без апскейла

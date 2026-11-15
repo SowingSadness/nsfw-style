@@ -1,0 +1,29 @@
+# flagship-preview: 16 GB VRAM / 64 GB RAM — черновик 768p на базовом Qwen без LoRA (FUSAL 0.0).
+# 768p (1376x768 при 16:9) без offload — самая быстрая сетка (~12-15 s на 8 шагах); финал
+# на 1440p стоит в разы дороже, поэтому композицию и промт проверяют здесь.
+# Цепочка: 768p native -> (апскейла нет, factor 0) -> 1376x768 черновик.
+# Энкодер heretic — `auto` (GPU + конвейер стриминга), 64 ГиБ RAM хватает и на CPU-эскапей.
+extends: base
+
+encoder:
+  name: heretic
+  cache_tag: heretic
+  device: auto
+  stream: true
+  prefetch: 4
+
+generation:
+  steps: 8
+  offload: none           # 768p влезает без offload (пик 15.5 ГиБ)
+  precision_cache: cache/models/fp8_transformer
+  sampler_kwargs:
+    offload_blocks: 1
+  lora:
+    scale: 0.0            # FUSAL выключена: обычный профиль, не anime
+
+size_px: 768              # 768p: 1376x768 при 16:9
+
+upscale:
+  backend: esrgan
+  factor: 0
+  target_height: 0        # черновик без апскейла

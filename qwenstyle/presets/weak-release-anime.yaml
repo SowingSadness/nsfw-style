@@ -1,0 +1,28 @@
+# weak-release-anime: 8 GB VRAM / 16 GB RAM — финальный кадр на базовом Qwen + FUSAL 0.7, 25 шагов.
+# Рендер 640p native (1152x640 при 16:9) + ESRGAN x1.6875 до 1080p: 1080 / 640.
+# 25 шагов здесь — полный профиль (distill-расписания у базовой модели нет); 640p выбран потому,
+# что на 8 ГиБ VRAM 768p без offload не влезает. Энкодер heretic — CPU + диск-стриминг, group.
+extends: base
+
+encoder:
+  name: heretic
+  cache_tag: heretic
+  device: cpu
+  stream: true
+  prefetch: 4
+
+generation:
+  steps: 25
+  offload: group
+  precision_cache: cache/models/fp8_transformer
+  sampler_kwargs:
+    offload_blocks: 1
+  lora:
+    scale: 0.7
+
+size_px: 640              # 640p: 1152x640 при 16:9
+
+upscale:
+  backend: esrgan
+  factor: 0               # фактор считается из target_height: 1080 / 640 = 1.6875
+  target_height: 1080     # целевой кадр weak-профиля (~1944x1080 при 16:9)

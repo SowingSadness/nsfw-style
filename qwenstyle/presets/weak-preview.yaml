@@ -1,0 +1,26 @@
+# weak-preview: 8 GB VRAM / 16 GB RAM — черновик на Turbo.
+# Шаги не переопределяются: у Turbo их ровно 8 (расписание sigmas из его model_index.json), а 480p
+# даёт самый дешёвый кадр 864x480 при 16:9 — именно на нём дешевле всего править промт.
+# Апскейл выключен (target_height 0): черновик смотрят как есть, ESRGAN нужен только финалу.
+# Энкодер heretic — CPU + диск-стриминг (16.33 ГиБ весов в 8 ГиБ VRAM не живут), трансформер — group.
+extends: turbo
+
+encoder:
+  name: heretic
+  cache_tag: heretic      # -> сегмент _te-heretic в имени кэша эмбеддингов
+  device: cpu             # weak: энкод только на CPU (легаси-имя записи, без -dev-cuda)
+  stream: true            # веса читаются с диска по модулям, в RAM не поднимаются целиком
+  prefetch: 4
+
+generation:
+  offload: group          # блоки трансформера на CPU, на GPU ~0.2 ГиБ вместо 6.6
+  precision_cache: cache/models/fp8_transformer_turbo
+  sampler_kwargs:
+    offload_blocks: 1     # блоков трансформера на GPU одновременно (меньше = меньше VRAM)
+
+size_px: 480              # 480p: 864x480 при 16:9
+
+upscale:
+  backend: esrgan
+  factor: 0               # 0 = фактор считается из target_height
+  target_height: 0        # апскейла нет: кадр отдаётся как сгенерирован

@@ -1,0 +1,28 @@
+# weak-preview-anime: 8 GB VRAM / 16 GB RAM — черновик на базовом Qwen + FUSAL 0.7.
+# 480p native (864x480 при 16:9) и 8 шагов вместо 25: одна итерация по промту/силе LoRA стоит
+# секунды генерации, а не минуты. LoRA 0.7 — рабочий диапазон правки картинки (AGENTS.md §5.6).
+# Апскейла нет (target_height 0). Энкодер heretic — CPU + диск-стриминг, трансформер — group.
+extends: base
+
+encoder:
+  name: heretic
+  cache_tag: heretic
+  device: cpu
+  stream: true
+  prefetch: 4
+
+generation:
+  steps: 8
+  offload: group
+  precision_cache: cache/models/fp8_transformer
+  sampler_kwargs:
+    offload_blocks: 1
+  lora:
+    scale: 0.7
+
+size_px: 480              # 480p: 864x480 при 16:9
+
+upscale:
+  backend: esrgan
+  factor: 0
+  target_height: 0        # черновик без апскейла
