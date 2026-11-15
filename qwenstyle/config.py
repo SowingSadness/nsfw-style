@@ -847,7 +847,7 @@ def prompt_md5(prompt: str) -> str:
 
 
 def load_prompt(cfg: RunConfig) -> str:
-    """Промт: из файла (promts/*.txt), иначе встроенный в конфиг."""
+    """Промт: из файла (prompts/*.txt), иначе встроенный в конфиг."""
     if cfg.prompt_file:
         return Path(cfg.prompt_file).read_text(encoding="utf-8").strip()
     return cfg.prompt

@@ -1,4 +1,4 @@
-"""Папка промта `promts/<имя>/` для `gen`: `prompt.txt`, фильтр картинок, порядок, guard.
+"""Папка промта `prompts/<имя>/` для `gen`: `prompt.txt`, фильтр картинок, порядок, guard.
 
 Запуск: `PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe tests/test_gen_folder.py`
 Успех: `PASS` по каждому кейсу, `ALL PASS` и exit 0; провал: `FAIL <кейс>: ...` и exit 1.
@@ -16,7 +16,7 @@
 4. `Capabilities.max_images` соблюдается: из 12 файлов берутся первые 10, в лог — кого отбросили;
 5. папка без картинок при `requires_image=True` — ошибка (а для T2I-модели — законный `noref`).
 
-Пользовательские каталоги не трогаются: корни `promts/` и `out/` подменяются на временный каталог
+Пользовательские каталоги не трогаются: корни `prompts/` и `out/` подменяются на временный каталог
 (`gen.PROMPT_ROOT`/`gen.session_dir`), поэтому тест не оставляет следов в репозитории.
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ from qwenstyle.cmd import gen as gen_cmd          # noqa: E402
 from qwenstyle.config import RunConfig   # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
-#: Готовый FUSAL-промт тестов (лежит в репозитории, а не в `promts/`).
+#: Готовый FUSAL-промт тестов (лежит в репозитории, а не в `prompts/`).
 TEST_PROMPT = TESTS_DIR / "texts" / "exp1.txt"
 #: Пресеты с разными требованиями к входу: `strong-release` требует референс, `h3-image` — нет.
 PRESET_NEEDS_IMAGE = "strong-release"
@@ -55,7 +55,7 @@ MAX_IMAGES = 10
 # --------------------------------------------------------------------------- #
 @contextlib.contextmanager
 def temp_roots():
-    """`promts/` и `out/` во временном каталоге: `gen` не пишет в репозиторий.
+    """`prompts/` и `out/` во временном каталоге: `gen` не пишет в репозиторий.
 
     Подменяются только корни (`gen.PROMPT_ROOT` и `out_root` у `gen.session_dir`); сама логика
     поиска/сортировки/guard'а остаётся пользовательской. `cwd` не меняется: относительные пути
@@ -63,7 +63,7 @@ def temp_roots():
     """
     with tempfile.TemporaryDirectory(prefix="qwenstyle-gen-folder-") as tmp:
         root = Path(tmp)
-        prompt_root = root / "promts"
+        prompt_root = root / "prompts"
         prompt_root.mkdir()
         original_root = gen_cmd.PROMPT_ROOT
         original_session_dir = gen_cmd.session_dir
@@ -247,7 +247,7 @@ def case_prompt_dir() -> None:
         code, out = run_gen("case-name")
         if code != 0:
             raise AssertionError(f"папка с дефисом в имени не принята: {out[-400:]}")
-    print("  ok: prompt_dir -> promts/<имя>, дефисы и подчёркивания в имени работают")
+    print("  ok: prompt_dir -> prompts/<имя>, дефисы и подчёркивания в имени работают")
 
 
 CASES = (

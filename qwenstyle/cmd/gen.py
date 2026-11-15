@@ -2,7 +2,7 @@
 
 Один вход, один выход, ничего не надо собирать из флагов:
 
-    promts/<имя>/
+    prompts/<имя>/
         prompt.txt          # ровно это имя: текст промта (FUSAL, см. PROMPT_RULES.md)
         image1.png          # …image10.* — референсы (до `Capabilities.max_images`)
         image2.jpg
@@ -53,12 +53,12 @@ from ..runlog import META_NAME
 from . import parse_sets
 
 NAME = "gen"
-HELP = ("сессия кадров из папки промта: promts/<имя>/prompt.txt + image*, "
+HELP = ("сессия кадров из папки промта: prompts/<имя>/prompt.txt + image*, "
         "--seeds SPEC | --count N -> out/<имя>/gen-<штамп>/")
 #: Файл промта — ровно это имя (план публикации, решение 11).
 PROMPT_FILE = "prompt.txt"
 #: Каталог пользовательских папок промтов (в `.gitignore`).
-PROMPT_ROOT = "promts"
+PROMPT_ROOT = "prompts"
 #: Корень результатов: сессия = `<out-root>/<имя>/gen-<штамп>/`.
 OUT_ROOT = "out"
 #: Расширения референсов (регистронезависимо).
@@ -130,9 +130,9 @@ def preset_hint() -> str:
 # --------------------------------------------------------------------------- #
 
 def prompt_dir(name: str) -> Path:
-    """`promts/<имя>` — папка промта (пользовательская, в `.gitignore`).
+    """`prompts/<имя>` — папка промта (пользовательская, в `.gitignore`).
 
-    Имя обязано остаться внутри `promts/`: `..`, абсолютные пути и всё, что после `resolve()`
+    Имя обязано остаться внутри `prompts/`: `..`, абсолютные пути и всё, что после `resolve()`
     выходит из корня, отклоняется (`ConfigError`), иначе `--prompt ../../etc` читал бы промт
     и писал сессию вне проекта.
     """
@@ -142,7 +142,7 @@ def prompt_dir(name: str) -> Path:
     if raw and not Path(raw).is_absolute() and ".." not in Path(raw).parts:
         try:
             inside = (root / raw).resolve().is_relative_to(root.resolve())
-        except (OSError, ValueError):             # нерезолвимый путь — считаем выходом из promts/
+        except (OSError, ValueError):             # нерезолвимый путь — считаем выходом из prompts/
             inside = False
     if not inside:
         raise ConfigError(f"имя папки промта должно быть внутри {PROMPT_ROOT}/ "
@@ -500,7 +500,7 @@ def run(args: argparse.Namespace) -> int:
         return 2
     try:
         folder = prompt_dir(prompt_name)
-    except ConfigError as exc:                       # `..`/абсолютный путь: выход из promts/
+    except ConfigError as exc:                       # `..`/абсолютный путь: выход из prompts/
         print(f"[gen] {exc}", file=sys.stderr, flush=True)
         return 2
     prompt_file = folder / PROMPT_FILE

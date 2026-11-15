@@ -43,7 +43,7 @@ Linux / macOS:
 ### 2. Положите промт и референсы
 
 ```text
-promts/
+prompts/
   my-scene/
     prompt.txt      # текст промта, имя файла фиксировано
     image1.png      # референс; можно до 10: image1…image10.*
@@ -80,10 +80,10 @@ out/my-scene/gen-20261115-1940/
 ```text
 [gen] сессия out/my-scene/gen-20261115-1940
 [gen] пресет strong-release · backend qwen_image21 · 25 шагов · lora 0 · энкодер heretic
-[gen] промт promts/my-scene/prompt.txt (md5 4819c8e1ddc4)
+[gen] промт prompts/my-scene/prompt.txt (md5 4819c8e1ddc4)
 [gen] референсов 1: image1.png
 [gen] сиды 4: <четыре случайных сида печатаются здесь>
-[plan] input promts/my-scene/image1.png (768x768, 1 референс) -> crop 960x960
+[plan] input prompts/my-scene/image1.png (768x768, 1 референс) -> crop 960x960
 [plan] upscale esrgan factor=1.5 target_height=1440 -> out 1440x1440
 [gen] seed <N>: <время>s 960x960 peak 6.4 GiB
 [gen] итог: 4 кадр(ов) в out/my-scene/gen-20261115-1940 · всего <сумма>s · среднее <…>s/кадр
@@ -149,7 +149,7 @@ python -m qwenstyle gen [--preset PRESET] [--prompt NAME] [--seeds SPEC | --coun
 | флаг | что делает |
 |---|---|
 | `--preset` | профиль/пресет. Шорткаты: `weak`/`strong`/`flagship` = `<family>-release`; `strong-preview`, `strong-release`, `strong-preview-anime`, `strong-release-anime`, `strong-anime` = `strong-release-anime`; `flagship-4k-fast`; либо точное имя любого пресета из `qwenstyle/presets/` |
-| `--prompt NAME` | папка `promts/NAME/`: `prompt.txt` (текст) + `image*.png\|jpg\|jpeg\|webp` (до 10 референсов) |
+| `--prompt NAME` | папка `prompts/NAME/`: `prompt.txt` (текст) + `image*.png\|jpg\|jpeg\|webp` (до 10 референсов) |
 | `--count N` | N случайных сидов (печатаются), взаимоисключающе с `--seeds` |
 | `--seeds SPEC` | явные сиды: `84`, `32-38`, `1,7,42`; без обоих флагов — один случайный сид |
 | `--aspect R` | пропорция кадра (`16:9`, `4:3`, `1:1`) вместо пропорции первого референса; для T2I без флага — `1:1` |

@@ -63,10 +63,10 @@
 
 Запуск:
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --preview \\
-        --input out/canyon-edit-640-lora1.0-s777.png --prompt-file promts/exp3.txt \\
+        --input out/canyon-edit-640-lora1.0-s777.png --prompt-file prompts/exp3.txt \\
         --out out/p.png
     .venv/Scripts/python.exe -m qwenstyle run --dry-run --config preview --steps 8 \\
-        --input out/canyon-edit-640-lora1.0-s777.png --prompt-file promts/exp3.txt --out out/p.png
+        --input out/canyon-edit-640-lora1.0-s777.png --prompt-file prompts/exp3.txt --out out/p.png
 """
 from __future__ import annotations
 
@@ -391,7 +391,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                         help=f"куда сохранить кадр (по умолчанию {DEFAULT_OUT}); к имени добавится "
                              f"-s{{seed}} и -x{{factor}}")
     source.add_argument("--prompt-file", default=None, metavar="PATH",
-                        help="взять промт из файла (promts/*.txt) вместо встроенного в конфиг")
+                        help="взять промт из файла (prompts/*.txt) вместо встроенного в конфиг")
     source.add_argument("--config", default=None, metavar="PRESET",
                         help=f"пресет ({', '.join(available_presets())}) или путь к YAML; "
                              f"по умолчанию {DEFAULT_CONFIG} (с --preview — preview)")

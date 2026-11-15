@@ -363,7 +363,7 @@ def run_vram(args: argparse.Namespace) -> int:
         print(f"[abort] нет кэша эмбеддингов для image {info['image_sha']} @ {info['crop']}",
               flush=True)
         print(f"        сначала один прогон: python -m qwenstyle run --config {cfg.preset} "
-              f"--resolution {cfg.resolution} --input {cfg.input} --prompt-file promts/exp3.txt "
+              f"--resolution {cfg.resolution} --input {cfg.input} --prompt-file prompts/exp3.txt "
               f"--out out/_bench.png", flush=True)
         print("        (иначе замер заплатит 55–255 с CPU-энкода)", flush=True)
         return 2

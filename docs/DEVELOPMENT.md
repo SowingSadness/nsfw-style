@@ -12,7 +12,7 @@
 |---|---|
 | 13 публичных пресетов (`weak-*`, `strong-*`, `flagship-*`) и профили машин (`qwenstyle/profiles.py`) | остальные пресеты (`base`, `turbo`, `preview-qwen`, `flux2`, `preview`, `demo`, `full-flux2`, `full-qwen`, `qwen-2k`, `h3-image`, `anime`, `qwen`) |
 | подкоманды `gen`, `run`, `selftest`, `env`, `models`, `cache`, `bench`, `config`, `compare-upscale` | внутренние функции `pipeline.run_batch`, `io.batch_paths`, `runlog`, `streaming`, `precision`, `cleanup` |
-| файлы `promts/<имя>/prompt.txt` + `image*`, папка сессии `out/<имя>/gen-<штамп>/` | layout `cache/embeds` (`*.pt` + `.json`), `cache/models`, имена `fp8_transformer*` |
+| файлы `prompts/<имя>/prompt.txt` + `image*`, папка сессии `out/<имя>/gen-<штамп>/` | layout `cache/embeds` (`*.pt` + `.json`), `cache/models`, имена `fp8_transformer*` |
 | `RunConfig.from_profile(<имя>)`, флаги `gen`/`run`, `--set` по `ParameterSpec` | dev-бекенды (`flux2`, `seedvr2`) и их параметры |
 
 Правило: публичные шаги (README, `bootstrap.*`, скрипты пользователя) **не должны** ссылаться на

@@ -26,7 +26,7 @@
 Генерация настоящая, но дешёвая: пресет `preview` (FLUX.2 klein, 1 шаг, 864×480), вход —
 синтетический градиент, промт — `tests/texts/exp1.txt`. Первый прогон платит энкод, остальные идут
 с попаданием в кэш эмбеддингов (R1). Сессия `gen` выполняется в **временном каталоге** (там свои
-`promts/` и `out/`), поэтому `out/` репозитория не трогается. `cache_supersede=none` — тест не
+`prompts/` и `out/`), поэтому `out/` репозитория не трогается. `cache_supersede=none` — тест не
 вытесняет чужие записи кэша.
 """
 from __future__ import annotations
@@ -165,7 +165,7 @@ def case_no_logs() -> None:
 def case_gen_session_log() -> None:
     """3. Схема `gen`: `run.log`/`meta.json` в корне сессии, кадры `s{N}.png` рядом, без подпапок.
 
-    Корни пользовательских каталогов (`promts/`, `out/`) подменяются на **временный** каталог:
+    Корни пользовательских каталогов (`prompts/`, `out/`) подменяются на **временный** каталог:
     тест не засоряет репозиторий, а схема лога (`cfg.log_dir` -> `RunLog.attach`) остаётся той
     же, что у пользователя. `cwd` не меняется — иначе относительные пути кешей (`cache/models/…`,
     `precision.resolve`) уехали бы во временный каталог и тест пересобрал бы 8.5 GiB fp8-кэша.
@@ -178,7 +178,7 @@ def case_gen_session_log() -> None:
 
     with tempfile.TemporaryDirectory(prefix="qwenstyle-gen-log-") as tmp:
         root = Path(tmp)
-        prompt_root = root / "promts"
+        prompt_root = root / "prompts"
         out_root = root / "out"
         folder = prompt_root / "case"
         folder.mkdir(parents=True)
@@ -248,8 +248,8 @@ def case_out_root_untouched() -> None:
         raise AssertionError(f"OUT_TESTS вне out/: {shared.OUT_TESTS}")
     if not shared.TEST_PROMPT.is_file():
         raise AssertionError(f"нет промта тестов {shared.TEST_PROMPT}")
-    if str(shared.TEST_PROMPT).replace("\\", "/").find("/promts/") >= 0:
-        raise AssertionError("промт тестов не должен жить в promts/ (он в .gitignore)")
+    if str(shared.TEST_PROMPT).replace("\\", "/").find("/prompts/") >= 0:
+        raise AssertionError("промт тестов не должен жить в prompts/ (он в .gitignore)")
     print("  ok: out/ чист (кадры и логи — в out/tests, промт — в tests/texts)")
 
 

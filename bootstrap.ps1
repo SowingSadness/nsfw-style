@@ -309,8 +309,8 @@ Write-Step 'Ready'
 
 Write-Host ''
 Write-Host '    Put a scene folder together:' -ForegroundColor White
-Write-Note 'promts\my-scene\prompt.txt   (FUSAL prompt, see PROMPT_RULES.md)'
-Write-Note 'promts\my-scene\image1.png    (optional references, up to 10)'
+Write-Note 'prompts\my-scene\prompt.txt   (FUSAL prompt, see PROMPT_RULES.md)'
+Write-Note 'prompts\my-scene\image1.png    (optional references, up to 10)'
 Write-Host ''
 Write-Host '    Generate:' -ForegroundColor White
 Write-Note ($python.Exe + ' -m qwenstyle gen --preset ' + $Profile + ' --prompt my-scene --count 1')

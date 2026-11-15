@@ -3,7 +3,7 @@
 Правила написания запросов к `Qwen/Qwen-Image-2.1` с FUSAL anime LoRA
 (`fusal-qwen-image-2.1-v2-exact-r80`) в этом проекте. Свод проверенных практик: скилл
 `.pi/skills/fusal-prompt/SKILL.md`, модель-карточка `.pi/skills/fusal-prompt/references/model-card.md`,
-эталоны `promts/exp1.txt`…`exp4.txt` и замеры из [`AGENTS.md`](AGENTS.md) (§4–§6).
+эталоны `prompts/exp1.txt`…`exp4.txt` и замеры из [`AGENTS.md`](AGENTS.md) (§4–§6).
 
 Связанные разделы `AGENTS.md`: §5 (формат промта), §5.5 (промт и кэш), §5.6 (сила LoRA),
 §6 (экономика итераций).
@@ -19,7 +19,7 @@
 
 Структурные блоки заставляют модель **перерисовать весь кадр** — это то, что нужно для новой сцены,
 и ровно то, чего нельзя делать, когда должны выжить лицо и раскладка исходника. Промты проекта
-(`promts/exp*.txt`) содержат `[TASK: IMAGE_EDIT]` **и** блоки одновременно — это гибрид; он работает,
+(`prompts/exp*.txt`) содержат `[TASK: IMAGE_EDIT]` **и** блоки одновременно — это гибрид; он работает,
 но при дрейфе лица/композиции сначала убирают блоки, а не крутят seed.
 
 ---
@@ -41,7 +41,7 @@
 7. **У каждого предмета одежды — цвет + материал/крой + длина.** Без цвета модель придумает свой.
 8. **Возраст всегда взрослый** (`adult`), анатомия — клинически и плоско (`nude`, `exposed breasts`,
    `bare midriff`). Намёков на несовершеннолетних быть не должно.
-9. **Промт — файл** (`promts/*.txt`), подаётся через `--prompt-file`. Правка текста = новый
+9. **Промт — файл** (`prompts/*.txt`), подаётся через `--prompt-file`. Правка текста = новый
    ключ кэша = новый энкод (см. §7).
 
 ---
@@ -133,8 +133,8 @@ fusal style.
 | `STYLE_ONLY` | SFW: только `Style` | 29 / 38 / 48 | перенос стиля почти без привязки к контенту |
 
 Тиры не смешивать: выбранный тир заполняется ровно своими блоками. Практически: **1–3 предложения
-на блок**. `promts/exp1.txt` (≈2.2k символов, 453 токена) — верхняя граница полезной детализации,
-`promts/exp3.txt` (≈1.0k символов, 218 токенов) — минимально достаточная. Перебор добавляет
+на блок**. `prompts/exp1.txt` (≈2.2k символов, 453 токена) — верхняя граница полезной детализации,
+`prompts/exp3.txt` (≈1.0k символов, 218 токенов) — минимально достаточная. Перебор добавляет
 противоречия, недобор даёт модели свободу выдумать лишнее; `[Style]` не раздувать повторами.
 
 > Почему это статистика трейна, а не технический лимит модели, и что будет на 2000+ символов,
@@ -208,7 +208,7 @@ fusal style.
 - [ ] ни одного глагола правки в структурированных блоках; запреты — в скобках;
 - [ ] `[Style]` начинается с `Anime-style illustration;`;
 - [ ] длина в полосе своего тира, 1–3 предложения на блок;
-- [ ] промт лежит в `promts/*.txt` и подаётся через `--prompt-file`.
+- [ ] промт лежит в `prompts/*.txt` и подаётся через `--prompt-file`.
 
 ---
 
@@ -217,15 +217,15 @@ fusal style.
 ```bash
 # черновик: 480p/640p, 8 шагов — ~11–20 с после прогрева кэшей (embeds + fp8-трансформер)
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --config preview-qwen \
-    --input <png> --prompt-file promts/exp3.txt --out out/preview.png --seed 1
+    --input <png> --prompt-file prompts/exp3.txt --out out/preview.png --seed 1
 
 # финал: 768p, 25 шагов — ~45 с при готовом кэше эмбеддингов
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --size 768p --steps 25 \
-    --input <png> --prompt-file promts/exp3.txt --out out/final.png
+    --input <png> --prompt-file prompts/exp3.txt --out out/final.png
 
 # план без загрузки весов: сетка crop, ключ кэша, нужен ли энкод
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --dry-run \
-    --config preview-qwen --input <png> --prompt-file promts/exp3.txt --out out/plan.png
+    --config preview-qwen --input <png> --prompt-file prompts/exp3.txt --out out/plan.png
 ```
 
 ### 9.1 Ловушка: `--preview` ≠ «черновик Qwen»
@@ -234,7 +234,7 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --dry-run \
 (`qwenstyle/cmd/run.py::pick_preset`: `return "preview" if args.preview else DEFAULT_CONFIG`):
 
 ```text
-$ python -m qwenstyle run --dry-run --preview ... --prompt-file promts/exp3.txt
+$ python -m qwenstyle run --dry-run --preview ... --prompt-file prompts/exp3.txt
 [plan] backend=flux2 preset=preview ... guidance=4.0 lora=—        <-- FLUX.2, FUSAL-промт ему чужой
 $ python -m qwenstyle run --dry-run --config preview-qwen ...
 [plan] backend=qwen_image21 preset=preview-qwen ... lora=0.7       <-- то, что нужно
@@ -300,14 +300,14 @@ Qwen-Image 2.1 со своей манерой письма. Если гоняе�
 - время и VRAM идентичны прогону с LoRA, энкод не платится: свип `0 / 0.5 / 0.7 / 1.0` стоит только
   GPU-шаги (~11–20 с на `--config preview-qwen`).
 
-Заготовка свободного промта под базу лежит в `promts/base-exp3.txt` (тот же сюжет, что `exp3`,
+Заготовка свободного промта под базу лежит в `prompts/base-exp3.txt` (тот же сюжет, что `exp3`,
 но без триггера и блоков):
 
 ```bash
 # A/B на одном входе и seed: --config preview-qwen (НЕ --preview, см. §9.1)
---config preview-qwen --lora-scale 1.0 --prompt-file promts/exp3.txt      --out out/tests/ab-lora.png
---config preview-qwen --lora-scale 0   --prompt-file promts/exp3.txt      --out out/tests/ab-lora0.png
---config preview-qwen --lora-scale 0   --prompt-file promts/base-exp3.txt --out out/tests/ab-base0.png
+--config preview-qwen --lora-scale 1.0 --prompt-file prompts/exp3.txt      --out out/tests/ab-lora.png
+--config preview-qwen --lora-scale 0   --prompt-file prompts/exp3.txt      --out out/tests/ab-lora0.png
+--config preview-qwen --lora-scale 0   --prompt-file prompts/base-exp3.txt --out out/tests/ab-base0.png
 ```
 
 ### Что показал замер (`out/tests/lora0-ab/`, 864×480, 8 шагов, seed 20261113,
@@ -394,11 +394,11 @@ image)`). То есть LoRA не «читает» промт как отдел�
 
 | Промт | символов | слов | токенов |
 |---|---:|---:|---:|
-| `promts/exp1.txt` | 2159 | 320 | 453 |
-| `promts/exp2.txt` | 2433 | 395 | 505 |
-| `promts/exp3.txt` | 1024 | 154 | 218 |
-| `promts/exp4.txt` | 1094 | 170 | 240 |
-| `promts/base-exp3.txt` (без блоков, для `lora=0`) | 1064 | 177 | 216 |
+| `prompts/exp1.txt` | 2159 | 320 | 453 |
+| `prompts/exp2.txt` | 2433 | 395 | 505 |
+| `prompts/exp3.txt` | 1024 | 154 | 218 |
+| `prompts/exp4.txt` | 1094 | 170 | 240 |
+| `prompts/base-exp3.txt` (без блоков, для `lora=0`) | 1064 | 177 | 216 |
 
 Символы посчитаны без учёта CRLF — в `AGENTS.md` §5 те же файлы дают на ~20 символов больше.
 

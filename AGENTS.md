@@ -80,7 +80,7 @@ FUSAL (R80 v2), img2img с сохранением композиции. Inferenc
 задачей (см. R2), `cmd/*` — подкоманды, `backends/*` — модели (в т.ч. `minimax_h3_image.py` —
 MiniMax-H3-Image: T2I + edit на модульном пайплайне diffusers), `presets/*.yaml` — данные
 (в т.ч. `h3-image.yaml`);
-`promts/exp1..4.txt` — эталоны промтов (см. §5); `promts/<имя>/` — формат входа `gen` (`prompt.txt` +
+`prompts/exp1..4.txt` — эталоны промтов (см. §5); `prompts/<имя>/` — формат входа `gen` (`prompt.txt` +
 `image*.png|jpg|jpeg|webp`, до `max_images` референсов);
 `cache/embeds/` — кэш эмбеддингов, `cache/models/` — квантование и веса энкодеров;
 `hf-cache/` — веса; `out/` — результаты (`out/tests/` — только артефакты тестов); `tests/` — обычные скрипты-проверки (pytest в venv нет и
@@ -132,7 +132,7 @@ MiniMax-H3-Image: T2I + edit на модульном пайплайне diffuser
 
 ```
 python -m qwenstyle gen --preset strong --prompt <имя> [--seeds 84,32-38 | --count N]
-                                # главная точка входа: папка promts/<имя>/ (prompt.txt + image*)
+                                # главная точка входа: папка prompts/<имя>/ (prompt.txt + image*)
                                 # -> out/<имя>/gen-YYYYMMDD-HHMM/ (кадры, run.log, meta.json в корне)
                                 # --dry-run — план без весов; --no-logs — без run.log
 python -m qwenstyle run [--preview | --size 768p | --resolution N] [--aspect 16:9|4:3|1:1] [--prompt-file ...] [--input ...] --out ...
@@ -202,7 +202,7 @@ hf cache verify <repo>                                  # целостность
 (или `logs: false` в пресете). Лог — наблюдение: ключ кэша эмбеддингов и кадр от него не зависят,
 ошибка записи не роняет прогон;
 `bench`/`selftest`/тесты ходят в `pipeline.run(..., log=None)` и папок не оставляют. Тесты
-пишут результаты только в `out/tests/`, а промт берут из `tests/texts/exp1.txt` (не из `promts/`,
+пишут результаты только в `out/tests/`, а промт берут из `tests/texts/exp1.txt` (не из `prompts/`,
 он в `.gitignore`).
 Вся новая логика добавляется в подкоманду (`qwenstyle/cmd/<name>.py`), а не в ядро; монолиты
 `run_style.py`/`upscale.py`/`colorfix.py`/`tools/*.py` удалены на шаге 11 переезда (git в
@@ -648,7 +648,7 @@ pinned-буфер всё же не выделился. Цена: H2D 20.5 вме
 чек-лист, цена правки) вынесены в [`PROMPT_RULES.md`](PROMPT_RULES.md); ниже — краткая версия,
 обязательная к соблюдению в этом репозитории.
 
-Эталоны — `promts/exp1.txt`…`exp4.txt`. Во всех четырёх **набор и порядок разделов идентичны**,
+Эталоны — `prompts/exp1.txt`…`exp4.txt`. Во всех четырёх **набор и порядок разделов идентичны**,
 меняется только детализация (1033–2443 символа). Новый промт пишется по этому же скелету.
 
 ### 5.1 Скелет
@@ -721,7 +721,7 @@ fusal style.
   с полным набором параметров. Любая правка формулировки или другой входной файл = miss и
   **6–35 с GPU-кодирования** Qwen3VL-8B (35 s cold @640×480, 6 s warm @1440×1088); на CPU
   (`--set encoder.device=cpu`) — 55 с @864×480 … 255 с @1376×768.
-- Финальные формулировки держать в `promts/` и подавать через `--prompt-file`, а не править в скрипте.
+- Финальные формулировки держать в `prompts/` и подавать через `--prompt-file`, а не править в скрипте.
 - Полный разбор экономики кэша и порядка итераций — §6; правила написания промтов — §5 и
   `.pi/skills/fusal-prompt/SKILL.md` (там же тиры, блоки T2I/I2I, R18-вариант и режимы правки).
 
@@ -750,7 +750,7 @@ fusal style.
 for s in 0.5 0.65 0.7 0.85 1.0; do
   PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run \
       --preview --lora-scale $s --seed 20261113 --out out/sw-$s.png \
-      --input out/camp/canyon-edit-640-lora1.0-s777.png --prompt-file promts/exp3.txt
+      --input out/camp/canyon-edit-640-lora1.0-s777.png --prompt-file prompts/exp3.txt
 done
 ```
 

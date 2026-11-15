@@ -291,8 +291,8 @@ step 'Ready'
 presets="$(profile_presets)"
 echo
 echo '    Put a scene folder together:'
-note 'promts/my-scene/prompt.txt   (FUSAL prompt, see PROMPT_RULES.md)'
-note 'promts/my-scene/image1.png    (optional references, up to 10)'
+note 'prompts/my-scene/prompt.txt   (FUSAL prompt, see PROMPT_RULES.md)'
+note 'prompts/my-scene/image1.png    (optional references, up to 10)'
 echo
 echo '    Generate:'
 note "$PY -m qwenstyle gen --preset $PROFILE --prompt my-scene --count 1"
