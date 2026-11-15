@@ -6,8 +6,8 @@
 Оба реэкспортируются из `qwenstyle.pipeline` **лениво** (`__getattr__`): `import qwenstyle`
 остаётся дешёвым и не тянет torch/PIL, пока не вызван сам прогон.
 
-Запуск: `python -m qwenstyle <command>` (`run`, `batch`, `env`, `cache`, `models`,
-`compare-upscale`, `bench`, `selftest`).
+Запуск: `python -m qwenstyle <command>` (`gen`, `run`, `selftest`, `env`, `cache`, `models`,
+`compare-upscale`, `bench`, `config`).
 """
 from __future__ import annotations
 

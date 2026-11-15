@@ -1,469 +1,299 @@
-# Qwen-Image-2.1 + FUSAL Anime LoRA — style-transfer на 16 ГБ VRAM
+# qwenstyle — локальный NSFW style-transfer аниме на Qwen-Image-2.1 + FUSAL
 
-Безопасная стилизация (composition-preserving img2img) в стилистике аниме **Prison School**
-(яп. 監獄学園 〜プリズンスクール〜 / *Kangoku Gakuen ~Prison School~*, манга Акиры Хирамото, аниме J.C.Staff, 2015).
-NSFW-генерация не выполняется и в промт не входит.
+Переносит вашу картинку в аниме-стиль FUSAL (Qwen-Image-2.1 + LoRA, img2img с сохранением
+композиции) и генерирует кадры с нуля; инференс полностью локальный — изображение никуда не уходит,
+начиная с 8 ГБ VRAM.
 
-## Результат
+> **18+ / NSFW.** Проект рассчитан на взрослую аудиторию и создан для NSFW-генерации: промты,
+> референсы и результаты могут содержать взрослый контент. Используя пакет, вы подтверждаете, что
+> вам есть 18 лет и что такой контент законен в вашей юрисдикции. Модели скачиваются с HuggingFace
+> под их собственными лицензиями — ответственность за использование лежит на вас.
 
-`out/prison-school-style.png` — 1376×768, вход `A8850259-B9D1-42FD-B3D4-67A70661E9C8.png` (1672×941).
-Композиция, позы, одежда и фон сохранены, изменён только рендер: жирный чёрный контур,
-двухтоновые тени, приглушённая палитра. 25 шагов ≈ 37 с (после прогрева), полный прогон 357 с.
+Требования: Python **3.12**, CUDA-сборка torch (Linux/Windows, ставится установочным скриптом),
+VRAM/RAM/диск — по профилю машины (см. таблицы ниже: 8 ГБ VRAM / 16 ГБ RAM — минимум для `weak`).
 
-## Железо и раскладка памяти
+## Quick start
 
-Правила для агентов/разработчиков (кэширование параметров, обязательный CLI, проверенные
-ограничения и цифры замеров) — в [`AGENTS.md`](AGENTS.md).
+### 1. Install
 
-RTX 4080 16 ГБ, 63.6 ГБ RAM. Модель 33.7 ГБ bf16 целиком не влезает:
+Windows:
 
-| Компонент | Размер | Где |
-|---|---|---|
-| transformer (7B DiT) | 14.2 ГБ bf16 → **~7 ГБ fp8** | GPU, `enable_layerwise_casting` |
-| text_encoder (Qwen3VL-8B) | 17.5 ГБ bf16 | GPU стримингом (пик VRAM 1–3.5 ГиБ), только при промахе кэша |
-| vae | 1.35 ГБ | GPU, `enable_slicing` + `enable_tiling` |
-| LoRA R80 | 420 МБ bf16 | GPU |
+```bat
+bootstrap.cmd -Profile strong
+```
 
-Пик VRAM — 15.5 ГБ при разрешении 1024 (768p). Резолюция 1280 (960p) в 16 ГБ не влезает целиком:
-нужен `--offload group` — замерено 66 с и пик 10.8 ГБ (см. `AGENTS.md` §4).
-
-## Установка
+Linux / macOS:
 
 ```bash
-py -3.12 -m venv .venv
-.venv/Scripts/python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129
-.venv/Scripts/python.exe -m pip install "transformers>=5.17" accelerate pillow safetensors peft
-.venv/Scripts/python.exe -m pip install "git+https://github.com/huggingface/diffusers"
+./bootstrap.sh strong
 ```
 
-Важно: обычный `pip install torch` на Windows ставит **CPU-сборку** — нужен `--index-url`
-на CUDA-индекс. `torchvision` обязателен: без него `transformers` падает на
-`Qwen3VLVideoProcessor`. Веса ~34 ГБ качаются в `hf-cache/` в папке проекта
-(`HF_HOME` в скрипте), embeddings кэшируются в `cache/`.
+Скрипт делает всё по шагам: создаёт `.venv`, ставит пакет с CUDA-индексом torch, печатает план
+загрузки моделей профиля (репозиторий → компоненты → ГиБ → лицензия → нужен ли `HF_TOKEN`),
+скачивает их, запускает `env` и `selftest`, затем печатает готовую команду `gen`.
+Проверить доступ к весам **без скачивания** (по одному маленькому файлу на репозиторий):
+`bootstrap.cmd -Profile strong -Check` (Linux: `./bootstrap.sh strong --check`).
+План без установки и загрузки: `-DryRun` / `--dry-run`.
 
-## Запуск
+### 2. Положите промт и референсы
 
-Точка входа — пакет `qwenstyle` (монолитный `run_style.py` удалён на шаге 11 переезда):
+```text
+promts/
+  my-scene/
+    prompt.txt      # текст промта, имя файла фиксировано
+    image1.png      # референс; можно до 10: image1…image10.*
+    image2.jpg
+```
+
+- Расширения референсов: `.png`, `.jpg`, `.jpeg`, `.webp`.
+- Порядок — по номеру в имени: `image2` идёт раньше `image10` (естественная сортировка).
+- Больше 10 картинок — берутся первые 10, в лог пишется, кого отбросили (предел модели).
+- Картинок может не быть вовсе — для моделей с поддержкой T2I (тогда пропорцию кадра задаёт `--aspect`,
+  без него — `1:1`).
+
+### 3. Сгенерируйте
 
 ```bash
-# черновик: 480p/640p, 8 шагов — ~11 с после прогрева кэшей (fp8-трансформер + эмбеддинги)
-PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --preview \
-    --input out/camp/canyon-edit-640-lora1.0-s777.png --prompt-file promts/exp3.txt --out out/preview.png
-
-# финал: 768p (--resolution 1024), 25 шагов — ~45 с, если кэш эмбеддингов уже есть
-PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --size 768p --steps 25 \
-    --input out/camp/canyon-edit-640-lora1.0-s777.png --prompt-file promts/exp3.txt --out out/final.png
-
-# turbo: distill-трансформер, 8 шагов (фиксированное расписание) — 21 с на 1024
-PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --model turbo --resolution 1024 \
-    --input out/camp/canyon-edit-640-lora1.0-s777.png --prompt-file promts/exp3.txt --out out/turbo.png
-
-# план без загрузки весов: сетка, ключ кэша, нужен ли энкод, шаги, апскейл
-PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --dry-run --config preview \
-    --steps 8 --input out/camp/canyon-edit-640-lora1.0-s777.png --prompt-file promts/exp3.txt --out out/p.png
+python -m qwenstyle gen --preset strong --prompt my-scene --count 4
 ```
 
-Финальный кадр (`full-qwen`): **1080p** (1440×1088, 6120 токенов) — **2.4 s/шаг** (плато 2.41–2.43,
-4.1 s/шаг — среднее по 2 шагам диагностики), 25 шагов **66–67 s**, `[done] total 75 s` без поста;
-**нативный 1440p** (1920×1440, 10800 токенов) — **16–17 s/шаг** (спилл активаций, 25 шагов ≈ 7 мин),
-а при 34 ГиБ занятой RAM снаружи — **70 s/шаг**. Поэтому дефолт `full-qwen` — рендер 1080p
-плюс ESRGAN до высоты 1440.
+Вместо `--count 4` можно перечислить сиды: `--seeds 84,32-38`. Если не указать ни то, ни другое —
+будет один случайный сид (он печатается и попадает в имя файла).
 
-`--aspect 16:9|4:3|1:1` задаёт пропорцию кадра вместо пропорций входа (по умолчанию — как у
-входного изображения). Пропорция влияет на сетку conditioning и попадает в ключ кэша
-(`embeds_…_2560x1440.pt`), поэтому смена аспекта = новый энкод (6–35 с на GPU). Референс при этом
-подгоняется scale-to-cover с центральным кропом — без сплющивания под чужую пропорцию.
+Результат — папка сессии `out/my-scene/gen-20261115-1940/`:
 
-Все флаги старого `run_style.py` сохранены 1:1: `--input --out --lora-scale --model --preview --steps
---size --resolution --aspect --seed --fp8 --fp8-cast-cache --rebuild-fp8-cache --offload --offload-blocks
---offload-stream --prompt-file --upscale --upscale-backend --upscale-weights --upscale-tile
---upscale-color-fix --upscale-color-strength --upscale-color-sigma --text-encoder`. Новое:
-`--config <пресет|путь>` (base/preview-qwen/turbo/flux2/preview/demo/full-flux2/full-qwen/h3-image/anime/qwen), `--set a.b=c` (точечный параметр `RunConfig`),
-`--dry-run` (план без модели) и `--check-parity` (сверка sha256 с эталоном).
-
-Остальные подкоманды (та же точка входа):
-
-```bash
-python -m qwenstyle batch ...           # N seed'ов за одну загрузку + пакетный апскейл (бывший tools/batch_seeds.py)
-python -m qwenstyle env                 # версии, GPU/VRAM/RAM, offline, счётчики кэшей, свободный диск
-python -m qwenstyle cache list|show|prune   # обслуживание кэша эмбеддингов (read-only по умолчанию)
-python -m qwenstyle models list|probe <repo> [--offline]   # бекенды и зондирование модели без скачивания
-python -m qwenstyle models download <repo> [--dry-run] [--yes]   # план файлов/размера; скачивание — только с --yes
-python -m qwenstyle compare-upscale --input <png> --height 960   # метрики апскейлеров на одном кадре
-python -m qwenstyle bench vram --resolution 640 --input <png>   # пик VRAM/RSS по фазам (бывший tools/measure_vram.py; --input обязателен)
-python -m qwenstyle check-parity        # паритет sha256 с tests/reference.json
-python -m qwenstyle config show base --set generation.steps=8   # резолвленный RunConfig
+```text
+out/my-scene/gen-20261115-1940/
+  s84.png  s85.png  s86.png  s87.png   # кадры (с апскейлом до целевой высоты профиля)
+  s84-gen.png …                        # чистая генерация, если апскейл включён
+  run.log                              # весь вывод прогона: [plan], [cache], [gen], [post], [done]
+  meta.json                            # параметры прогона, argv, время
 ```
 
-Параметры: `--model base|turbo` (turbo — только явно), `--preview` (640p + 8 шагов), `--size 768p`
-(высота кадра; `--resolution` считается по пропорциям входа, 1280 = 960p — только с `--offload group`),
-`--steps` (turbo — всегда 8 по расписанию), `--lora-scale` (по умолчанию из пресета: 0.7), `--seed`
-(по умолчанию из пресета: 20261113), `--fp8 0/1`, `--prompt-file`, `--out`, `--fp8-cast-cache`,
-`--rebuild-fp8-cache`, `--text-encoder base|heretic`, `--upscale 0|2|3|4|<дробный>`,
-`--upscale-backend esrgan|seedvr2`, `--upscale-weights`, `--upscale-tile`, `--no-logs`.
+Как это выглядит в консоли (числа — с нашей машины, см. таблицу пресетов):
 
-### Генерация без референса (`--aspect` вместо `--input`)
-
-`--input` больше не обязателен: нужен ли модели референс, объявляет сам бекенд
-(`Capabilities.requires_image`, по умолчанию `True` — прежнее поведение), а ядро решает это в
-`pipeline.input_problem()` **до** загрузки весов. `qwen_image21` и `flux2` без картинки падают
-одной строкой `модель qwen_image21 требует референс: передайте --input <png>` (exit 2, без
-трейсбека), а `h3-image` работает и без неё — режим (`text2image` или `image_conditioned`)
-модульный пайплайн выбирает сам по наличию `image`:
-
-```bash
-# T2I: пропорцию кадра задаёт --aspect (без него — 1:1), --size задаёт высоту
-PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --config h3-image \
-    --prompt-file promts/exp3.txt --aspect 1:1 --size 512p --seed 20261113 --out out/h3i-t2i.png
-
-# edit: тот же пресет, но с референсом
-PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --config h3-image \
-    --prompt-file promts/exp3.txt --size 512p --input imgs/nita-tmp.png --out out/h3i-edit.png
-
-# план без весов: сетка, ключ кэша, нужен ли энкодер
-... -m qwenstyle run --config h3-image --dry-run --prompt-file promts/exp3.txt --aspect 1:1 --out out/_h3i.png
+```text
+[gen] сессия out/my-scene/gen-20261115-1940
+[gen] пресет strong-release · backend qwen_image21 · 25 шагов · lora 0 · энкодер heretic
+[gen] промт promts/my-scene/prompt.txt (md5 4819c8e1ddc4)
+[gen] референсов 1: image1.png
+[gen] сиды 4: <четыре случайных сида печатаются здесь>
+[plan] input promts/my-scene/image1.png (768x768, 1 референс) -> crop 960x960
+[plan] upscale esrgan factor=1.5 target_height=1440 -> out 1440x1440
+[gen] seed <N>: <время>s 960x960 peak 6.4 GiB
+[gen] итог: 4 кадр(ов) в out/my-scene/gen-20261115-1940 · всего <сумма>s · среднее <…>s/кадр
 ```
 
-В ключ кэша вместо sha256 картинки попадает сегмент `noref`:
-`text_embeds_…_noref_te-h3qwen32-heretic-dev-cuda_1024x1024.pt` — T2I-записи не смешиваются с
-записями по картинкам, старые ключи Qwen/FLUX.2 не изменились. Замеры (512×512, seed 20261113,
-4080): холодный edit — **201 s** (энкод 32B 82.8 s + генерация 86.2 s), тёплый — **34 s**; T2I при
-готовом кэше `text_embeds` — **`total 96–99 s`** (генерация 83.0–83.1 s), тёплый — **29 s**;
-пик VRAM 6.2/7.1 ГиБ. **На дефолтном размере пресета (1088×1024, edit, seed 84):** энкод 32B
-**127.5 s** (2311 токенов), генерация **101.8 s** на первом кадре и **~39.8 s** на последующих,
-peak-ish VRAM **7.5 GiB**, `[done] total 264 s`; батч из 8 seed'ов — **327 s** (поэтому финалом
-можно сразу брать `size_px: 1024`, а 512p держать для черновиков).
+## Модели здесь не хостятся
 
-### Правила написания промтов
+В репозитории **только код**, манифесты и скрипты загрузки — весов, кэшей и примеров NSFW-кадров
+в нём нет. `bootstrap.*` / `python -m qwenstyle models download --profile …` скачивают веса прямо
+с HuggingFace под их лицензиями; ничего не публикуется и не перезаливается.
 
-Как писать запросы к Qwen-Image 2.1 + FUSAL (два режима: структурные блоки и инструкционная
-правка, скелеты, что в каждом блоке, длина, антипаттерны, чек-лист, цена правки) —
-[`PROMPT_RULES.md`](PROMPT_RULES.md). Краткая обязательная версия и эталоны — `AGENTS.md` §5,
-`promts/exp1.txt`…`exp4.txt`; скилл `fusal-prompt` — `.pi/skills/fusal-prompt/SKILL.md`.
-
-### Логи прогона: `<кадр>/run.log` и `--no-logs`
-
-Каждый прогон кладёт свой отладочный лог **рядом со своим кадром**, а не в общий файл:
-
-```
-out/rainforest-s20261113.png          # кадр (путь не изменился)
-out/rainforest-s20261113/run.log      # весь вывод прогона: [profile], [size], [in], ключ кэша,
-                                      #   [1/4]…[4/4], время фаз, [post], [done]
-out/rainforest-s20261113/meta.json    # параметры прогона (RunConfig) + argv + время
-```
-
-* stdout и stderr идут одновременно в консоль и в лог (прогресс виден, traceback падения
-  остаётся в файле); ранние строки (`[profile]` печатается до открытия файла) попадают в лог
-  из буфера — порядок строк как в консоли;
-* батч — одна папка на сессию: `<out-dir>/_logs/<YYYYmmdd-HHMMSS>/run.log`;
-* `--no-logs` не создаёт ни папки, ни файла (вывод только в консоль); в пресетах это поле
-  `logs: false` / `--set logs=0`;
-* лог — наблюдение: сбой записи печатает `[log] …` и не роняет генерацию; ключ кэша эмбеддингов
-  и сам кадр от него не зависят;
-* `check-parity` и тесты идут без логов (`pipeline.run(..., log=None)`) — регресс-прогон не
-  оставляет папок рядом с кадрами паритета.
-
-
-### Пресеты
-
-`qwenstyle/presets/*.yaml` — только данные (`extends:` = deep-merge), читаются `RunConfig.from_profile()`:
-
-| пресет | что это | модель / шаги / кэш точности |
-|---|---|---|
-| `base` | профиль по умолчанию: FUSAL R80 v2 | `Qwen/Qwen-Image-2.1`, 25 шагов, fp8, `cache/fp8_transformer` |
-| `preview-qwen` | черновик Qwen для итераций по промту | `extends: base`, `size_px: 480` (864×480 при 16:9), 8 шагов |
-| `turbo` | distill-профиль | transformer из `Qwen/Qwen-Image-2.1-Turbo` + Turbo E6 R128 LoRA, 8 шагов (расписание `sample_sigmas`), `cache/fp8_transformer_turbo` |
-| `flux2` | базовый FLUX.2 klein | `Flux2KleinPipeline` + `Qwen3ForCausalLM`, `conditioning=internal`, `image_inputs=multi`, fp8 |
-| `preview` | черновик FLUX.2 | `extends: flux2`, `size_px: 768` (1376×768), 8 шагов, без offload — 33 с |
-| `demo` | быстрая демонстрация | `extends: flux2`, `size_px: 960` + ESRGAN до `target_height: 1440` → 2592×1440 за ~61 с |
-| `full-flux2` | финал FLUX.2 | `extends: flux2`, `size_px: 1440` + `offload: group`, `offload_blocks: 2` → 121 с, пик VRAM 15.7 GiB |
-| `h3-image` | MiniMax-H3-Image: T2I и edit одним пайплайном | `MiniMaxAI/MiniMax-H3-Image` (33.13B), **6 фиксированных шагов** PDD, fp8 30.9 ГиБ + `offload: group`, `cache/fp8_transformer_h3_image`; LoRA неприменима, энкодер — Qwen3-VL-32B (`h3qwen32-heretic`), `--input` необязателен |
-| `anime` | мягкий перенос стиля | `extends: base`, `size_px: 1080`, 25 шагов, `offload: group`, **`lora.scale: 0.3`**, `upscale.target_height: 1440`; энкодер **пинит `base`** (не heretic) |
-| `full-qwen` | финал Qwen: 1080p + апскейл | `extends: base`, `size_px: 1080`, 25 шагов, `offload: group`, `offload_blocks: 1`, `upscale.target_height: 1440` → 1440×1088, **2.4 s/шаг** |
-| `qwen` | алиас `base` | `extends: base` (меняется base.yaml — меняется и qwen) |
-
-Апскейлер по умолчанию во всех пресетах — **Real-ESRGAN anime6B** (`upscale.backend: esrgan`,
-≈1.5 с и <1 ГиБ VRAM); SeedVR2 включается флагом `--upscale-backend seedvr2` (см. «Апскейлеры»).
-
-Энкодер по умолчанию — **Heretic-1.3.0** (`presets/base.yaml` → `encoder.name: heretic`): именно на
-его conditioning обучалась LoRA. Откат к штатному — `--text-encoder base` (другое имя кэша: без
-`_te-heretic`). Пресет `anime` пинит `base` явно.
-
-### Проверка паритета после переезда
-
-`python -m qwenstyle check-parity` воспроизводит записи `tests/reference.json` (`base-640-8`,
-`turbo-640`, `esrgan-x4`, `batch-2seeds`, `flux2-preview-8`) **новым** каркасом и сравнивает `sha256`
-кадров (у батча — только `s{N}-gen.png`), печатает PASS/FAIL по каждой записи и выходит с кодом 1
-при любом FAIL. Эталоны сняты старым кодом до его удаления (`tools/parity_refs.py` — документ, как
-именно), кроме `flux2-preview-8`: эта запись снята уже новым каркасом (`--config preview`, FLUX.2,
-1376×768, 8 шагов, seed 20261113, sha256 `233b527c…`) и проверяется наравне с остальными.
-
-Необязательное поле `requires` в записи (репозиторий Хаба вроде
-`darknight9121/FLUX.2-klein-base-9B-bucket-uncensored` или путь вроде `./cache/fp8_transformer_flux2`)
-делает эталон переносимым: если чего-то нет, печатается `[skip] <entry>: <причина>`, запись не
-считается ни PASS, ни FAIL, а итог показывает `skipped N` (код возврата 0 при FAIL 0). На этой
-машине все веса на месте: `10/10 проверок PASS, FAIL 0, skipped 0`.
-
-`run --check-parity auto` подбирает запись по **метке профиля** (`cmd/run.py::model_label`): `base` —
-всё семейство Qwen-Image-2.1 + FUSAL R80 (`base`, `qwen`, `preview-qwen`, `full-qwen`), `turbo` —
-свой, а `preview` — FLUX.2 и остаётся `preview`. Раньше `preview` считался «тем же base, только
-черновым» и авто-сверка подбирала чужой эталон `base-640-8` (тест `tests/test_profiles.py`).
-
-### Как добавить модель генерации / апскейла / энкодера
-
-1. **Модуль бекенда** `qwenstyle/backends/<name>.py` с `@register_generation` (`@register_upscale`,
-   `@register_encoder`), `caps: Capabilities` и `budget: ResourceBudget` — контракты в
-   `qwenstyle/backends/base.py`. Conditioning объявляется честно: `precomputed` (сами считаем
-   эмбеддинги и кэшируем `.pt`) или `internal` (промт + референсы уходят в пайплайн, как у FLUX.2).
-2. **Пресет** `qwenstyle/presets/<name>.yaml` — только данные: `extends: base`, `generation.backend:
-   <name>`, `encoder.name`, `upscale.backend`, шаги/точность/`precision_cache`.
-3. **Проверка без скачивания**: `python -m qwenstyle models list` (caps/budget в строке) и
-   `python -m qwenstyle models probe <repo> --offline` — компоненты и вердикт по 16 ГБ VRAM,
-   63.6 ГБ RAM и свободному диску.
-4. **Прогон**: `python -m qwenstyle run --config <name> --dry-run …`, затем без `--dry-run`.
-
-`qwenstyle/pipeline.py` и `qwenstyle/cli.py` при этом не меняются: ядро знает бекенды только по имени.
-
-### Текстовый энкодер: Heretic по умолчанию, `--text-encoder base` для штатного (D7)
-
-Оба энкодера — Qwen3-VL-8B (`hidden_size 4096` — ровно то, что требует
-`transformer/config.json → context_in_dim`), различаются только весами MLP `down_proj`:
-
-| `encoder.name` | что это | веса | тег в ключе кэша |
+| репозиторий | что это | лицензия | gated |
 |---|---|---|---|
-| **`heretic`** (по умолчанию) | `DreamFast/Qwen3-VL-8B-Heretic-1.3.0` @ `28dc0129…` — abliterated-версия, conditioning как при тренировке LoRA | `cache/weights/heretic-te` (16.72 ГиБ bf16, 4 шарда) | `_te-heretic` |
-| `base` | штатный Qwen3VL-8B из `Qwen/Qwen-Image-2.1` (`text_encoder/`) | `hf-cache/…` | без сегмента |
+| `Qwen/Qwen-Image-2.1` | базовая модель: transformer + text-encoder + VAE (≈30.9 ГиБ bf16) | Apache-2.0 | нет |
+| `Qwen/Qwen-Image-2.1-Turbo` | distill-трансформер (8 шагов); энкодер и VAE берутся из base | Apache-2.0 | нет |
+| `MicksHF/Qwen-Image-2.1-Anime-Fusal` | адаптеры FUSAL: R80 (base) и Turbo E6 R128 | лицензия в карточке репозитория | нет |
+| `DreamFast/Qwen3-VL-8B-Heretic-1.3.0` | текст-энкодер heretic 8B (16.33 ГиБ bf16) — **умолчание** | Apache-2.0 | **да** |
+| `MiniMaxAI/MiniMax-H3-Image` | 33.13B, 6 шагов PDD, T2I и edit (только профиль `flagship`) | MiniMax H3 Community License | нет |
+| `llmfan46/Qwen3-VL-32B-Instruct-ultra-uncensored-heretic` | 32B-энкодер для H3-Image (62.14 ГиБ bf16) | Apache-2.0 | нет |
 
-Пресет `anime` пинит `base`; `base`, `qwen`, `preview-qwen`, `full-qwen`, `turbo` берут heretic из
-`presets/base.yaml`. Переключение флагом: `--text-encoder base|heretic`. processor/tokenizer в обоих
-случаях базовые — так предписывает карточка LoRA.
+Gated-репозиторий (`DreamFast/Qwen3-VL-8B-Heretic-1.3.0`) требует принять лицензию на сайте
+HuggingFace и передать токен: `export HF_TOKEN=…` (PowerShell: `$env:HF_TOKEN = "…"`). Без него
+`models download`/`--probe` возвращают код 2 с подсказкой.
 
-```bash
-PYTHONIOENCODING=utf-8 HF_HUB_OFFLINE=0 .venv/Scripts/python.exe -c "from huggingface_hub import snapshot_download as s; \
-  s('DreamFast/Qwen3-VL-8B-Heretic-1.3.0', revision='28dc0129b4c7c16304bc2ed3697c9437ae8ac2f3', \
-  allow_patterns=['model-*.safetensors','*.index.json','config.json','generation_config.json'], \
-  local_dir='cache/weights/heretic-te')"
+Не в публичных профилях (только для разработки, см. [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)):
+FLUX.2 klein — у него **FLUX Non-Commercial License v2.1** (только некоммерческое использование),
+SeedVR2-3B — апскейлер, который пока не доведён до стабильного состояния.
 
-# дальше как обычно; по умолчанию энкодер — heretic, откат к штатному:
-... -m qwenstyle run --text-encoder base --out out/base-encoder.png
+## Ваша машина → профиль → одна команда
+
+| машина | профиль | диск | целевой кадр | загрузка моделей | первый прогон |
+|---|---|---|---|---|---|
+| 8 ГБ VRAM / 16 ГБ RAM | **weak** | ≈ 75 ГиБ | 1080p | `python -m qwenstyle models download --profile weak --yes` | `python -m qwenstyle gen --preset weak --prompt my-scene --count 4` |
+| 16 ГБ VRAM / 32 ГБ RAM | **strong** | ≈ 55 ГиБ | 1440p | `python -m qwenstyle models download --profile strong --yes` | `python -m qwenstyle gen --preset strong --prompt my-scene --count 4` |
+| 16 ГБ VRAM / 64 ГБ RAM | **flagship** | ≈ 181 ГиБ | 4K UHD | `python -m qwenstyle models download --profile flagship --yes` | `python -m qwenstyle gen --preset flagship --prompt my-scene --count 4` |
+
+Профиль — это данные ([`qwenstyle/profiles.py`](qwenstyle/profiles.py)): список репозиториев,
+адресованные пресеты, след на диске и целевая высота кадра. План без скачивания:
+`python -m qwenstyle models download --profile strong --dry-run`; проверка доступа без полной
+загрузки: `--probe`.
+
+Чем профили отличаются по существу:
+
+- `weak` — энкодер работает **на CPU** с диск-стримингом весов (90–111 с на новую пару «промт +
+  картинка + сетка»), генерация — 480p Turbo / 640p base, финал добирается ESRGAN до 1080p.
+  Первая правка промта дорогая, дальше всё берётся из кэша эмбеддингов.
+- `strong` — энкодер на GPU (`device: auto` → `cuda` + конвейер стриминга, 5–6 с), 768p черновик /
+  960p финал + ESRGAN до 1440p. LoRA FUSAL по умолчанию выключена (`lora 0`), anime-пресеты
+  включают её на 0.7.
+- `flagship` — то же железо, но 64 ГБ RAM: добавляются MiniMax-H3-Image (33.13B, T2I + edit) и
+  32B heretic-энкодер, финал — 1440p native или быстрый 1088p → 4K UHD. На 32 ГБ RAM этого
+  профиля нет: H3 держит 30.9 ГиБ fp8-трансформера в RAM при групповом offload.
+
+## Справочник `gen`
+
+```text
+python -m qwenstyle gen [--preset PRESET] [--prompt NAME] [--seeds SPEC | --count N]
+                        [--aspect R] [--set KEY=VALUE] [--dry-run] [--no-logs]
 ```
 
-В ключ кэша эмбеддингов попадает тег `_te-heretic`, так что записи двух энкодеров не путаются,
-а базовые остаются валидными. Каждая пара (промт, картинка, резолюция) с heretic — новый энкод:
-190 с @864×480 (замер CPU-пути). По умолчанию (`encoder.device: auto`) энкодер стримится на GPU
-(пик VRAM 1–3.5 ГиБ) и после кодирования освобождается; на CPU — только `--set encoder.device=cpu`.
-
-### Энкод промта на GPU по умолчанию
-
-`encoder.device: auto` (пресет `base`) разрешается в `cuda` при доступной CUDA и сам включает
-стриминг весов (`stream=True`, `prefetch=4`): Qwen3VL-8B (16.33 ГиБ, вместе с vision-башней) идёт
-с диска через VRAM по одному модулю, поэтому ни 16.3 ГиБ RAM, ни 16 ГиБ VRAM целиком не нужны.
-После кодирования VRAM освобождается (`text_encoder=None`), в шагах сэмплера энкодер не участвует,
-флагов не требуется:
-
-```bash
-... -m qwenstyle run --size 1080p --input … --prompt-file … --out out/final.png
-# [4/5] кодирование промта на GPU (Qwen3VL-8B, стриминг)... ok, 6s (1, 2513, 4096)
-```
-
-Замеры: **35 с** cold (640×480, 1283 токена) · **6 с** warm (1440×1088, 2513 токенов) · **0 с**
-при попадании в кэш эмбеддингов. Откат на CPU-путь — `--set encoder.device=cpu`
-(55 с @864×480 … 255 с @1376×768, RSS 17.6 ГиБ; такая запись кэша идёт без `-dev-cuda`).
-
-### Энкодер больше RAM (`--set encoder.stream=true`)
-
-Если энкодер не влезает в RAM целиком (32B в bf16 — 62 ГиБ), модель можно собирать на meta-параметрах
-и читать веса каждого модуля с диска перед его forward (`qwenstyle/streaming.py`). Результат
-бит-в-бит, ключ кэша эмбеддингов не меняется; поле `stream` по умолчанию выключено, но на GPU-пути
-(`encoder.device: auto` + CUDA) включается автоматически — см. раздел выше. Замер на FLUX.2-энкодере
-(15.26 ГиБ, 16 токенов, CPU):
-
-```bash
-... -m qwenstyle bench encoder --repo <repo> --subfolder text_encoder --tokens 16 --stream 0 --save cache/_bench/te_full.pt
-... -m qwenstyle bench encoder --repo <repo> --subfolder text_encoder --tokens 16 --stream 1 --compare cache/_bench/te_full.pt
-```
-
-`peak_uss` 15.91 → **1.75 ГиБ** (`peak_rss` 15.93 → 17.10 — mmap попадает в rss, метрика режима —
-`uss`), `max diff 0` на слоях 9/18/27; forward медленнее: 5.8 → 8.4 с. На реальных 4-шардовых
-весах heretic-te (`cache/weights/heretic-te`, 16.33 ГиБ, 750 тензоров) то же самое:
-`peak_uss` 16.93 → **1.75 ГиБ** (−15.19 ГиБ, ~9.7×), `max diff 0`, forward 4.1 → 5.6 с.
-В текущих пресетах режим нужен только для FLUX.2-энкодера и будущих внешних (`encoder.local_dir`),
-а на GPU-пути Qwen (`encoder.device: auto` + CUDA) он включается автоматически; `stream=True` работает
-и на `device='cpu'`, и на `cuda` (см. раздел ниже).
-
-### Энкодер на GPU: RAM-стейджинг и конвейер
-
-Тот же `qwenstyle/streaming.py`, но веса модулей читаются с диска в pinned-буфер RAM фоновым
-потоком и асинхронно копируются в VRAM: пока GPU считает слой N, читается слой N+1. В VRAM живёт
-один модуль (пик VRAM 1.2–3.5 ГиБ), поэтому схема работает и для весов, не влезающих в VRAM.
-
-```bash
-# плечи: NVMe→RAM (cold/warm) и RAM→VRAM (pinned/pageable) — секунды
-... -m qwenstyle bench io --read-gib 4 --h2d-gib 0.5
-
-# GPU-энкод одного прогона: качество сверяется с CPU через --save/--compare
-... -m qwenstyle bench encoder --repo <ID> --stream 1 --device cuda --prefetch 4 --tokens 512
-
-# то же в реальном прогоне (prefetch/пиннинг/lookahead — только при stream=true + device=cuda)
-... -m qwenstyle run ... --set encoder.stream=true --set encoder.device=cuda --set encoder.prefetch=4
-```
-
-Замерено (`out/bench/te-gpu-stream.md`, FLUX.2-энкодер 8.19B / 15.26 ГиБ bf16): на 512 токенах CPU
-**97.6 s** → GPU **10.4 s** (9.4×); время GPU почти не зависит от длины промта (10.3 / 10.4 / 10.5 s
-на 16 / 512 / 4128 токенах) — режим **I/O-bound** (ожидание данных 0.92–0.97 бюджета), а не
-compute-bound; плечи — NVMe 4.39 (cold) / 6.81 (warm) ГБ/с, H2D pinned 26.70 ГБ/с; `max|diff|`
-prefetch 0 vs 4 = 0.0, CPU vs GPU = 128.0 (поэтому `device`/`dtype` — в ключе кэша: сегменты
-`-fp16` / `-dev-cuda` в имени файла). Это же — умолчание на машине с CUDA (`encoder.device: auto`
-→ `cuda` + `prefetch=4`); откат на CPU — `--set encoder.device=cpu`.
-
-**Pinned staging и `--offload group`:** на Windows pinned-память CUDA — это тот же ресурс, что и
-VRAM (блокировка страниц + маппинг в адресное пространство GPU), а групповой offload уже держит в
-ней 6.6–8.5 ГиБ весов fp8-трансформера. Поэтому при `generation.offload=group`
-(`full`, `full-qwen`) пиннинг staging-буферов энкодера **выключается автоматически**
-(`RunConfig.encoder_pin_memory`; `--set encoder.pin_memory=1` его не включает), а если pinned-буфер
-всё равно не выделился — `qwenstyle/streaming.py` деградирует до обычной RAM и печатает `[stream]
-pin_memory выключен`. Цена — H2D 20.5 вместо 26.7 ГБ/с (0.05–0.31 s из 8–10 s энкода), выигрыш —
-прогон не падает с `CUDA error: out of memory` при свободной VRAM. Замер: `full-qwen` 1088p с нуля —
-энкод 16.33 ГиБ стримится с `pin_memory=0`, полный прогон **76 s**.
-
-### Энкодер для `h3-image`: Qwen3-VL-32B (`h3qwen32-heretic`)
-
-У MiniMax-H3-Image свой энкодер, и ни один из 8B проекта сюда не подходит: H3 читает hidden state
-**после 50-го decoder layer** и ждёт `text_dim 5120`, а у всех 8B (Qwen-Image-2.1, heretic-8B,
-FLUX.2-энкодер) `hidden 4096` (плюс у FLUX.2 нет vision). Поэтому пресет `h3-image` пинит
-`encoder.name: h3qwen32-heretic` — `llmfan46/Qwen3-VL-32B-Instruct-ultra-uncensored-heretic`
-@ `c44b949b30d11166…`, **62.13 GiB bf16**, тег `_te-h3qwen32-heretic` в ключе кэша.
-
-| что | замер |
+| флаг | что делает |
 |---|---|
-| веса | `cache/weights/h3qwen32-heretic` — 62.13 GiB, **3 шарда** < 40 GiB (23.79/23.86/14.49); в hf-cache шард 46.5 GiB, а `safetensors` 0.8.0 на Windows падает на файлах ≥ ~40 GiB, поэтому веса пересобраны (`out/bench/h3i-te-reshard.py`) |
-| stream 1 + cuda + prefetch 4 (512 токенов) | загрузка 0.4 s, forward **205.2 s**, `peak_uss` **5.25 GiB**, `peak_vram` 1.93 GiB |
-| stream 0 + cpu (те же 512 токенов) | загрузка 175.1 s, forward 524.8 s, `peak_uss` **48.98 GiB** — вариант не работает вместе с fp8-трансформером |
-| в прогоне (512×512) | T2I: **118.9 s** (218 токенов, `(1,218,5120)`); edit: **82.8 s** (1249 токенов, синхронный стриминг быстрее конвейера) |
+| `--preset` | профиль/пресет. Шорткаты: `weak`/`strong`/`flagship` = `<family>-release`; `strong-preview`, `strong-release`, `strong-preview-anime`, `strong-release-anime`, `strong-anime` = `strong-release-anime`; `flagship-4k-fast`; либо точное имя любого пресета из `qwenstyle/presets/` |
+| `--prompt NAME` | папка `promts/NAME/`: `prompt.txt` (текст) + `image*.png\|jpg\|jpeg\|webp` (до 10 референсов) |
+| `--count N` | N случайных сидов (печатаются), взаимоисключающе с `--seeds` |
+| `--seeds SPEC` | явные сиды: `84`, `32-38`, `1,7,42`; без обоих флагов — один случайный сид |
+| `--aspect R` | пропорция кадра (`16:9`, `4:3`, `1:1`) вместо пропорции первого референса; для T2I без флага — `1:1` |
+| `--set KEY=VALUE` | точечный параметр `RunConfig` (можно повторять); неизвестный ключ отбивается кодом 2 со списком допустимых параметров бекенда |
+| `--dry-run` | только план: сетка, ключ кэша эмбеддингов, будет ли энкод, апскейл, папка сессии; веса не грузятся |
+| `--no-logs` | не писать `run.log` в папку сессии (кадры и `meta.json` остаются) |
 
-Фаза энкодера идёт **отдельным процессом** (на этой машине mmap списывается в commit целиком,
-а fp8-кэш держит ~2× своего размера — см. `AGENTS.md` §4), fp8-трансформер грузится позже, в
-`generate`. На холодную за энкод платится 118.9–205.2 s, дальше — 0 s из кэша `text_embeds`.
-Холодная фаза пока хрупкая (фоллбек — одна повторная попытка синхронным стримингом, долг D10).
+Что происходит с картинками: референсы сортируются естественно (`image2` < `image10`), лишние
+сверх `max_images` бекенда (у Qwen-Image-2.1 и H3 — 10) отбрасываются с записью в лог. Кроп кадра
+считается по **первому** референсу; пропорция — по нему же, если не задан `--aspect`.
 
-Устаревшие эмбеддинги убирает политика вытеснения `cache_supersede` (`qwenstyle/cleanup.py`,
-умолчание `pair`: сменил промт или картинку → старые записи этой пары удаляются отложенной задачей
-в конце прогона; разрешение/аспект не вытесняются никогда). Если параллельно идут два `run` с
-разными промтами на одной картинке — `--set cache_supersede=none`, иначе они могут вытеснить кэш
-друг друга. Регресс-тест `check-parity` и `bench` (vram/encoder) всегда идут с этой политикой
-выключенной: они не вытесняют и не удаляют ни одной записи.
+Имена файлов: `s{seed}.png` — итоговый кадр (после апскейла), `s{seed}-gen.png` — чистая генерация,
+она появляется только когда апскейл действительно включён. Один прогон = одна папка
+`out/<имя>/gen-YYYYMMDD-HHMM/` (`-2` при коллизии минуты), `run.log` и `meta.json` — в корне папки.
 
-Имена файлов: к `--out` автоматически добавляется `-s<seed>`, а при `--upscale` ещё и `-x4`/`-x2` —
-так генерёный и апскейленный кадры не перезаписывают друг друга, а seed всегда видно в имени.
-При смене `--steps`/`--lora-scale` задавай свой `--out`.
+Смотреть на кадры «пачкой» дешевле, чем по одному: внутри одной сетки `--seeds`/`--count`, `--steps`
+и `--lora-scale` бесплатны (кэш эмбеддингов тот же), платится только генерация.
 
-### Апскейлеры: список и настройки
+## Пресеты и измеренное время кадра
 
-Апскейл — отдельный бекенд (`qwenstyle/backends/{seedvr2,esrgan}.py`), запускается после того, как
-пайплайн генерации освобождён. **По умолчанию в пресетах — `esrgan`** (быстро и дёшево по VRAM);
-`seedvr2` включается флагом `--upscale-backend seedvr2`. Выключить совсем:
-`--upscale 0 --set upscale.target_height=0`.
+13 публичных пресетов. Полная таблица (включая размеры PNG и разбор «первый прогон против
+повторного») — [`docs/bench/presets.md`](docs/bench/presets.md); там же условия замера.
 
-| `upscale.backend` | что делает | веса / диск | скорость (4080) | пик VRAM |
+Условия: **RTX 4080 16 ГБ VRAM / 63.6 ГБ RAM**, Windows 11, torch 2.8.0+cu129, `HF_HUB_OFFLINE=1`,
+прогретый page cache весов, `seed=1`, один квадратный референс 768×768. Поэтому все сетки ниже
+квадратные: 480×480, 640×640, 960×960… На референсе 16:9 того же размера сетка больше по площади
+в 1.78×, и время генерации растёт примерно пропорционально числу токенов (например
+`flagship-release` 1440p 16:9 — около 7 минут, а не 88 с).
+
+| пресет | native | итоговый кадр | время кадра, s | пик VRAM, ГиБ |
 |---|---|---|---|---|
-| **`esrgan`** (по умолчанию) | Real-ESRGAN x4plus_anime_6B (своя RRDBNet без `basicsr`), тайловый инференс | `cache/weights/RealESRGAN_x4plus_anime_6B.pth` — 17.9 МиБ, качаются сами | 864×480 → 3456×1920: 0.4 с; 1376×768 → 5504×3072: 1.5 с | < 1 ГиБ |
-| `seedvr2` (опция) | SeedVR2-3B (ByteDance) — реставрация с переносом текстуры; отдельное окружение `seedvr2/` (torch 2.3 cu121) | `seedvr2/SeedVR/ckpts/`: 12.6 ГиБ c fp8-хранением + 0.93 ГиБ VAE, **17 ГиБ** на диске | 864×480 → 1728×960: **71 с** в пайплайне; 1440×1088 → 1924×1440: **62 с** (+19 с с `color_fix=wavelet`); x3 (2592×1440) работает, **x4 — OOM** | 8.5 ГиБ |
+| `weak-preview` | 480p | 480×480 | 113 (энкод CPU cold) | 4.1 |
+| `weak-release` | 640p | 1080×1080 | 133 (энкод CPU cold) | 5.0 |
+| `weak-preview-anime` | 480p | 480×480 | 22 | 4.1 |
+| `weak-release-anime` | 640p | 1080×1080 | 26 | 4.9 |
+| `strong-preview` | 768p | 768×768 | 24 | 13.1 |
+| `strong-release` | 960p | 1440×1440 | 51 | 6.4 |
+| `strong-preview-anime` | 768p | 768×768 | 21 | 11.5 |
+| `strong-release-anime` | 960p | 1440×1440 | 45 | 6.4 |
+| `flagship-preview` | 768p | 768×768 | 19 | 11.5 |
+| `flagship-preview-anime` | 768p | 768×768 | 19 | 11.5 |
+| `flagship-release` | 1440p | 2160×2160 | 106 | 13.9 |
+| `flagship-release-anime` | 1440p | 2160×2160 | 100 | 13.9 |
+| `flagship-4k-fast` | 1088p | 2160×2160 | 61 | 7.3 |
 
-Настройки (`UpscaleConfig` — пресет, `--set`, CLI-флаг):
+Что читается из таблицы:
 
-| поле | флаг | по умолчанию | к чему относится |
-|---|---|---|---|
-| `backend` | `--upscale-backend esrgan\|seedvr2` | `esrgan` | выбор бекенда |
-| `factor` | `--upscale F` | `0.0` (=выкл) | во сколько раз увеличить; дробный считается от готового кадра |
-| `target_height` | `--upscale-to NNNp` | `null` | целевая высота; если задана, `factor` вычисляется из неё (1440/1088 = ×1.32353) |
-| `weights` | `--upscale-weights PATH` | `null` | путь к `.pth` — **только `esrgan`** (seedvr2 берёт свои ckpts) |
-| `tile` | `--upscale-tile N` | `256` | **только `esrgan`**: тайл инференса (тайлы дают max diff 7/255 к целому кадру) |
-| `pad` | `--set upscale.pad=N` | `32` | **только `esrgan`**: перекрытие тайлов |
-| `color_fix` | `--upscale-color-fix none\|wavelet\|reinhard` | `wavelet` | **только `seedvr2`**: цветокоррекция результата по исходному кадру |
-| `color_strength` | `--upscale-color-strength F` | `0.75` | **только `seedvr2` + `wavelet`**: сила коррекции |
-| `color_sigma` | `--upscale-color-sigma F` | `12.0` | **только `seedvr2` + `wavelet`**: радиус вейвлет-разложения |
+- **Время кадра** — весь процесс от старта до сохранённого PNG (`[done] … total`), включая загрузку
+  модели и энкод. Апскейл дешёвый: 0.4–1.9 с на кадр вплоть до 2160×2160.
+- **`-anime` = LoRA FUSAL 0.7** и по времени бесплатен: разница с неаниме-ветками в пределах шума
+  (LoRA меняет веса трансформера, а не число шагов). Черновики — 8 шагов, релизы — 25.
+- **Черновики дешёвые, финалы — нет**: `flagship-preview` (768p, 8 шагов) — 19 с против 106 с у
+  `flagship-release` (1440p, 25 шагов); `flagship-4k-fast` даёт тот же 2160×2160 за 61 с ценой
+  синтетической текстуры от ESRGAN ×1.985.
+- **`offload: group` виден по пику VRAM, а не по времени**: `strong-preview` (768p без offload) —
+  13.1 ГиБ, `strong-release` (960p с offload) — 6.4 ГиБ, потому что без offload 960p не влезает.
+- **Первый прогон против повторного** (та же пара «промт + картинка», новый процесс): `weak-preview`
+  113 → 22 с (−91 с, энкод был 90 с), `strong-release` 51 → 47 с, `flagship-release` 106 → 101 с.
+  Критичен кэш эмбеддингов только для `weak-*` (CPU-энкод); у `strong-*`/`flagship-*` GPU-энкод —
+  5–6 с, то есть меньше 10 % прогона.
 
-```bash
-# апскейлер из пресета (esrgan) + target_height 1440
-PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --config full-qwen \
-    --seed 84 --input imgs/nita-iren-only.png --prompt-file promts/nita-bedroom-film.txt --out out/f.png
+## Кеши и диск
 
-# SeedVR2 вместо ESRGAN, его цветокоррекция и выключение апскейла совсем
-... -m qwenstyle run --config full-qwen --upscale-backend seedvr2 --out out/f-sv2.png
-... -m qwenstyle run --config full-qwen --upscale-backend seedvr2 --upscale-color-fix none --out out/f-sv2-nocf.png
-... -m qwenstyle run --config full-qwen --set upscale.target_height=0 --out out/f-raw.png
+| что | где | можно ли чистить |
+|---|---|---|
+| кэш эмбеддингов промта и картинок | `cache/embeds/` (`embeds_<md5>_<sha>_<тег>_<W>x<H>.pt` + `.json`, `text_embeds_…` для FLUX.2/H3) | **да**: `python -m qwenstyle cache prune …` (без `--apply` — только план), плюс автоматическое вытеснение политикой `cache_supersede` (умолчание `pair`: сменил промт или картинку → старые записи этой пары удаляются отложенно в конце прогона) |
+| кэш моделей: fp8-квантование и локальные веса | `cache/models/` — `fp8_transformer*` (base / turbo / flux2 / h3_image) и `weights/` (энкодеры heretic 8B/32B, ESRGAN) | **нет**: не вытесняется никогда; пересборка квантования — только `--rebuild-fp8-cache` |
+| исходные веса моделей | `hf-cache/` (`HF_HOME`), каноническая раскладка `blobs/` + симлинки `snapshots/<commit>/` | вручную, если не нужны |
+
+`python -m qwenstyle env` печатает фактический размер каждого кэша, свободную VRAM/RAM и диск:
+
+```text
+[cache]
+  cache/embeds: 19 записей, 243.2 MiB, сеток: 13 (…) — вытесняется (`cache prune`, `cache_supersede`)
+  cache/models: 5 объект(ов), 131.2 GiB — не вытесняется никогда (пересборка: --rebuild-fp8-cache)
+    cache/models/fp8_transformer: 6.6 GiB
+    cache/models/weights: 78.5 GiB
+[disk]
+  G:\Work\nsfw-style свободно 116.9 GiB из 931.5 GiB
 ```
 
-**Real-ESRGAN anime6B — дефолтный бекенд**: веса `cache/weights/RealESRGAN_x4plus_anime_6B.pth`
-(17.9 МиБ, качаются автоматически), своя реализация RRDBNet без `basicsr`, тайлы 256/pad 32.
-На текущем стеке тайлы дают **max diff 7** (из 255) к прогону целым кадром — это не ошибка каркаса
-(старый `upscale.py` давал то же), сверка old-vs-new теперь в `python -m qwenstyle check-parity`
-(запись `esrgan-x4`). Пик VRAM < 1 ГиБ, 1376×768 → 5504×3072 за 1.5 с.
+Сколько занимает профиль целиком (загрузка + производные кэши): `weak` ≈ 75 ГиБ, `strong` ≈ 55 ГиБ,
+`flagship` ≈ 181 ГиБ — эти числа печатает и `models download --profile … --dry-run`.
 
-Апскейл **пропускается автоматически**, если кадр уже не ниже `upscale.target_height` (или фактор ≈ 1):
-бекенд не загружается, печатается `[post] upscale пропущен: …`, `-x1` в имени не появляется.
-При этом `--upscale 0` не отменяет `upscale.target_height` из пресета — чистый кадр без поста:
-`--set upscale.target_height=0`.
+Как удалить скачанное: отдельной команды «стереть всё» нет, потому что кеши разделены по смыслу.
+Удалить кэш эмбеддингов — `python -m qwenstyle cache prune --all --apply` (или просто удалить
+`cache/embeds/`). Удалить веса и квантование — вручную `hf-cache/` и `cache/models/`; после этого
+`models download --profile …` и первый прогон создадут их заново (см. ниже про цену).
 
-**SeedVR2-3B (по флагу `--upscale-backend seedvr2`)** — установлен, работает в отдельном окружении `seedvr2/` (torch 2.3 cu121 +
-официальный код ByteDance-Seed/SeedVR; его требования несовместимы с torch 2.8 / diffusers 0.43).
-Веса bf16 12.6 ГиБ + VAE 0.93 ГиБ; на 16 ГБ работает только с **fp8-хранением весов (по умолчанию
-включено)** и с патчами из `seedvr2/patches.py` (flash_attn-шим на SDPA, apex → RMSNorm,
-RoPE-таблица под фактический кадр вместо фиксированных 7.88 ГиБ). Замер: 864×480 → 1728×960
-за 71 с, пик 8.5 ГиБ. x4 не проверялся (вероятен OOM). Установка на новой машине:
-`python seedvr2/setup.py`.
+## Почему первый прогон дольше
 
-`--model turbo` использует только transformer из `Qwen/Qwen-Image-2.1-Turbo` (14 GiB) + Turbo LoRA
-(640 MiB); text-encoder и VAE — базовые, и это не компромисс: проверено по файлам, что в Turbo-репо
-лежат ровно те же VAE (F32 vs BF16 хранения) и text-encoder (все 750 тензоров), что в базовом.
-Адаптер помечен авторами как preview (still under training).
+Две вещи считаются один раз и потом лежат на диске:
 
-## Кэши
+1. **fp8-квантование трансформера** (`cache/models/fp8_transformer*`): bf16 → fp8 каст в base-профиле —
+   ≈26 с каста + ≈14 с записи 6.7 ГиБ, у H3-Image — 202.8 с на 30.9 ГиБ. Второй старт читает готовый
+   кэш (0.4–0.6 с).
+2. **Эмбеддинги промта и картинок** (`cache/embeds`): `weak-*` — CPU-энкод 90–111 с на новую пару
+   «промт + картинка + сетка», `strong-*`/`flagship-*` — GPU-энкод 5–6 с; из кэша — 0 с.
 
-| Кэш | Где | Что экономит |
-|---|---|---|
-| Веса | `hf-cache/` (32 GiB, канонически: `blobs/` + симлинки) | повторные загрузки с HF |
-| fp8-трансформер | `cache/fp8_transformer/` и `cache/fp8_transformer_turbo/` (по 6.7 GiB) | 26 с каста + чтение 14.2 ГБ вместо 6.7 на каждом старте |
-| Эмбеддинги | `cache/embeds_<md5(промт)>_<sha256(картинки)>_<W>x<H>.pt` + `.json` | **6–35 с** GPU-энкода (35 с cold @640×480, 6 с warm @1440×1088), 0 с из кэша; 55 с @864×480 / 255 с @1376×768 — только на CPU (`--set encoder.device=cpu`) |
+Отсюда рабочий порядок: зафиксировать картинку и промт → подобрать всё на дешёвом черновике
+(`*-preview`, 8 шагов) → один финальный прогон. Любая правка текста промта, другой файл референса
+или другая сетка (`--aspect` в `gen`, `--size`/`--resolution` в `run`) = новый энкод. А `--seeds`,
+`--count`, `--steps`, `--lora-scale` бесплатны — они не меняют conditioning.
 
-Порядок работы: один раз зафиксировать картинку и промт → перебирать `--seed` / `--lora-scale` /
-`--steps` на `--preview` (бесплатно) → один финальный прогон на 1024. Любая правка текста промта,
-другой входной файл или другая резолюция = новый энкод (6–35 с на GPU, 0 с из кэша).
-Подробно — `AGENTS.md` §6.
+Ограничения по железу (проверено):
 
-Батч по seed'ам (замена `tools/batch_seeds.py`): `python -m qwenstyle batch --config preview-qwen
---seed-range 0-9 --upscale-to 768p --out-dir out/batch --input … --prompt-file …`. Пайплайн грузится
-один раз, апскейл идёт после его выгрузки, файлы — `s{N}-gen.png`/`s{N}.png`, `--resume` по умолчанию.
-Ширина финального кадра считается по пропорциям **готового** кадра: старый `--out-res 1024` давал
-1376×768, новый `--upscale-to 768p` — 1382×768 (высота совпадает). Чистая генерация `s{N}-gen.png`
-от этого не зависит.
+- **8 ГБ VRAM** — только профиль `weak` (групповой offload, энкодер на CPU). 768p без offload
+  и FLUX.2/H3 сюда не влезают.
+- **16 ГБ VRAM** — `strong`/`flagship`; 960p и 1440p требуют `offload: group` (в пресетах он уже
+  выставлен), без него 960p даёт OOM.
+- **32 ГБ RAM** — без H3-Image: групповой offload держит 30.9 ГиБ fp8-трансформера в RAM, поэтому
+  флагманскому профилю нужны 64 ГБ.
+- Нативный 1440p (25 шагов ≈ 7 минут) оправдан только для узких кадров: `flagship-4k-fast` даёт тот
+  же 4K вдвое дешевле, а `strong-release` — 1440p из 960p через ESRGAN.
 
-Правила написания промтов (структурированные блоки, тиры, режимы правки картинки) — скилл
-`.pi/skills/fusal-prompt/SKILL.md`, эталоны — `promts/exp1..4.txt`.
+## Проверка установки
 
-## Отступления от примера из переписки
+```bash
+python -m qwenstyle selftest --profile strong
+```
 
-В присланном коде было четыре проблемы:
+`selftest` проверяет окружение (версии, CUDA, свободные VRAM/RAM/диск), наличие весов и
+fp8-кэша профиля и делает один дешёвый рендер 480p/4 шага на синтетической картинке из памяти
+(проверяется размер и то, что кадр не пустой). Коды возврата: 0 — всё в порядке, 2 — чего-то не
+хватает (веса профиля), 1 — ошибка. Полезные варианты: `--dry-run` (только проверки, без рендера)
+и `--json`. Этот же selftest запускает установочный скрипт в конце.
 
-1. `dtype=` вместо `torch_dtype=` — правильное имя параметра в diffusers 0.43.
-2. `device_map="cuda"` — 33.7 ГБ не влезают в 16 ГБ, нужен fp8 + стриминговый text-encoder
-   (по модулю в VRAM, см. «Энкод промта на GPU по умолчанию»).
-3. `pipe(...)` в `DiffusionPipeline` без `QwenImage21Pipeline` — у модели своя обёртка
-   (`_class_name: QwenImage21Pipeline` в `model_index.json`).
-4. результат не сохранялся (нет `image.save`).
+## Лицензии и приватность
 
-Дополнительно: `true_cfg_scale` у 2.1 по умолчанию 1.0, поэтому `negative_prompt`
-**игнорируется** — CFG выключен, он не нужен. `peft` создаёт LoRA-тензоры в dtype
-базового слоя (fp8), а `addmm` для fp8 не реализован — в скрипте они кастуются в bf16.
+Код пакета — MIT (`LICENSE`). Веса моделей — под их лицензиями (таблица выше). Инференс локальный:
+кадры, промты и логи никуда не отправляются, у diffusers нет телеметрии; наружу уходят только
+скачивания весов с HuggingFace. `run.log` и `meta.json` в папке сессии содержат промт и пути —
+это локальные файлы для отладки; не нужны — `--no-logs` (или удалить папку).
 
-## Приватность этой сборки
+## Про `bootstrap.ps1` напрямую
 
-* Инференс локальный: изображение никуда не уходит, у `diffusers` нет телеметрии.
-* Наружу уходят только скачивания весов с HuggingFace (анонимно, без токена).
-* Веса LoRA — `.safetensors` (не pickle), исполняемого кода при загрузке нет.
-* Выходной PNG сохраняется через `PIL.save` без `pnginfo`: промта и параметров внутри нет.
-* Отладочный лог (`<кадр>/run.log`) и `meta.json` рядом с кадром **содержат промт и пути** —
-  это локальные файлы для отладки; не нужны — запускать с `--no-logs` (или удалить папку кадра).
-* У исходного файла EXIF отсутствует (проверено) — GPS/даты/устройства в нём нет.
-* «Heretic» (расцензуренный) text encoder из репозитория LoRA **не используется** —
-  взят официальный энкодер `Qwen/Qwen-Image-2.1`.
+Запускать `bootstrap.ps1` руками в PowerShell обычно не нужно: после скачивания ZIP с GitHub у
+файлов появляется зона MOTW, и PowerShell отказывается исполнять скрипт
+(`… cannot be loaded because running scripts is disabled on this system`). `bootstrap.cmd` — тонкая
+обёртка, которая снимает метку (`Unblock-File` для `*.ps1` в папке) и вызывает PowerShell с
+`-NoProfile -ExecutionPolicy Bypass`, не меняя политику в системе. Если запускаете `.ps1` напрямую,
+сделайте то же самое:
+
+```powershell
+Get-ChildItem *.ps1 | Unblock-File
+powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1 -Profile strong
+```
+
+## Правила написания промтов
+
+Как писать запросы к Qwen-Image-2.1 + FUSAL (два режима: структурные блоки `[Subject]`/`[Appearance]`/…
+и инструкционная правка картинки, скелеты, длина, антипаттерны, чек-лист) — [`PROMPT_RULES.md`](PROMPT_RULES.md).
+Правила для агентов и внутреннее устройство — [`AGENTS.md`](AGENTS.md) (профили машин, кэши, замеры)
+и [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) (dev-опции, как добавить бэкенд, как мерить).

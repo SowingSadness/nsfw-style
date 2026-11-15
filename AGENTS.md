@@ -2,10 +2,54 @@
 
 Локальный style-transfer: **Qwen-Image-2.1** + FUSAL anime LoRA (R80), img2img с сохранением
 композиции. Inference только локальный, на одной RTX 4080 16 ГБ. Точка входа — пакет `qwenstyle`
-(`python -m qwenstyle run|batch|env|cache|models|compare-upscale|bench|check-parity`),
+(`python -m qwenstyle gen|run|selftest|env|cache|models|compare-upscale|bench|config`),
 описание результата и раскладки памяти — `README.md`.
 
 Этот файл — обязательные правила для любого агента/разработчика, который меняет код в репозитории.
+
+---
+
+## 0. Профили машин: что советовать
+
+Профиль — единственный ответ на вопрос «что советовать этой машине». Данные — `qwenstyle/profiles.py`
+(`PROFILES`, `profile()`, `disk_estimate()`), пресеты — `qwenstyle/presets/<профиль>-*.yaml`.
+Публичный обзор для пользователя — `README.md` («Ваша машина → профиль»), измеренные времена —
+`docs/bench/presets.md`.
+
+| железо | профиль | пресеты | диск | целевой рендер |
+|---|---|---|---|---|
+| 8 ГБ VRAM / 16 ГБ RAM | `weak` | `weak-preview`, `weak-release`, `weak-preview-anime`, `weak-release-anime` (480p/640p, энкодер **CPU** + диск-стриминг, `offload: group`) | ≈ 75 ГиБ | 1080p (ESRGAN ×1.69) |
+| 16 ГБ VRAM / 32 ГБ RAM | `strong` | `strong-preview`, `strong-release`, `strong-preview-anime`, `strong-release-anime` (768p без offload / 960p с `offload: group`, энкодер на GPU) | ≈ 55 ГиБ | 1440p (ESRGAN ×1.5) |
+| 16 ГБ VRAM / 64 ГБ RAM | `flagship` | `flagship-preview`, `flagship-preview-anime`, `flagship-release`, `flagship-release-anime`, `flagship-4k-fast` | ≈ 181 ГиБ | 4K UHD (2160) |
+
+Жёсткие правила рекомендаций:
+
+- **8 ГБ VRAM — только `weak-*`**: там энкодер идёт на CPU (`encoder.device: cpu` + `stream: true`) и
+  везде включён `offload: group`. 960p/1440p, FLUX.2 и H3-Image этой машине не советовать.
+- **32 ГиБ RAM — не советовать H3-Image** (`h3-image`, флагманский профиль): групповой offload держит
+  30.9 ГиБ fp8-трансформера в RAM, на 32 ГиБ это упирается в спилл.
+- **Дефолтный энкодер — `heretic`** (`encoder.name: heretic`, `cache_tag: heretic`): только на его
+  conditioning LoRA обучалась. `base` — осознанным флагом (`--text-encoder base` или
+  `--set encoder.name=base`), и это другой ключ кэша (тег `_te-heretic` в имени файла).
+- **Новый пресет обязан попасть в профиль** — в `presets=…` (и при необходимости в `repos`/`disk_gib`)
+  `qwenstyle/profiles.py`; иначе он существует только для разработки и должен быть помечен dev-only
+  в `docs/DEVELOPMENT.md`. Публичные имена — `<family>-<stage>[-anime]`; `gen --preset` разрешает
+  шорткаты (`strong` = `strong-release`, `strong-anime` = `strong-release-anime`).
+- **Проверка установки — `selftest`**, а не эталоны кадров: `python -m qwenstyle selftest --profile
+  <имя>` (окружение → веса профиля → один рендер 480p/4 шага). `models download --profile … --probe`
+  проверяет доступ к весам без полной загрузки.
+- **В README и в советах — только измеренные числа** из `docs/bench/presets.md` (наша машина:
+  RTX 4080 16 ГБ / 63.6 ГБ RAM) и `profiles.py`; не обещать «влезет на любой GPU».
+
+### Политика кешей: `cache/embeds` ↔ `cache/models`
+
+| ветка | что внутри | правила |
+|---|---|---|
+| `cache/embeds/` | вычисленный conditioning: `embeds_<md5>_<sha>…_<W>x<H>.pt` (+ `.json`), `text_embeds_…` (FLUX.2/H3), `_stale/` | **вытесняется**: `cache prune … --apply` (без флага — только план) и автоматически политикой `cache_supersede` отложенной задачей в конце прогона; одна запись на сетку, смена `--size`/`--resolution`/`--aspect` ничего не удаляет |
+| `cache/models/` | `fp8_transformer*` (квантование трансформеров) и `weights/` (heretic 8B/32B, ESRGAN) | **не вытесняется никогда**: пересборка только `--rebuild-fp8-cache`; `cache list|show|prune` в эту ветку не заглядывают |
+
+`hf-cache/` (`HF_HOME`) — исходные веса, тоже не чистится автоматически. Ключ эмбеддингов от путей
+не зависит: переезд `cache/*.pt` → `cache/embeds/` — это путь, а не другая математика.
 
 ---
 
@@ -21,7 +65,7 @@
 | diffusers | 0.43.0.dev0, transformers 5.22.2, peft 0.21.2, huggingface_hub 2.4.0, hf_xet 1.8.0 |
 | Модели | `base`: `Qwen/Qwen-Image-2.1` + R80 v2, 25 шагов · `turbo`: transformer из `Qwen/Qwen-Image-2.1-Turbo` + Turbo E6 R128 LoRA, 8 шагов (text-encoder и VAE — базовые) · `h3-image`: `MiniMaxAI/MiniMax-H3-Image` (33.13B, 6 шагов PDD, T2I и edit) + энкодер Qwen3-VL-32B |
 | Кэш весов | `hf-cache/` в корне проекта (`HF_HOME`), ~32 GiB (плюс снапшот H3-Image, 64 GiB), канонический layout `blobs/` + относительные симлинки в `snapshots/<commit>/` |
-| Кэш вычислений | `cache/` — `*.pt` с эмбеддингами промта/картинки, fp8-кэши трансформеров (`fp8_transformer*`) и `cache/weights/` (веса энкодеров) |
+| Кэш вычислений | `cache/embeds/` — `*.pt` с эмбеддингами промта/картинки (+ `.json`-сайдкары), `_stale/`; `cache/models/` — fp8-кэши трансформеров (`fp8_transformer*`) и `weights/` (веса энкодеров, ESRGAN) |
 | Консоль | Windows, cp1251 → запускать с `PYTHONIOENCODING=utf-8`, иначе кириллица в логах ломается |
 
 Файлы: `qwenstyle/` — пакет (CLI `cli.py`, `config.py` — единственный источник параметров,
@@ -32,11 +76,11 @@
 задачей (см. R2), `cmd/*` — подкоманды, `backends/*` — модели (в т.ч. `minimax_h3_image.py` —
 MiniMax-H3-Image: T2I + edit на модульном пайплайне diffusers), `presets/*.yaml` — данные
 (в т.ч. `h3-image.yaml`);
-`promts/exp1..4.txt` — эталоны промтов (см. §5); `cache/` — кэш эмбеддингов и fp8-трансформера;
+`promts/exp1..4.txt` — эталоны промтов (см. §5); `promts/<имя>/` — формат входа `gen` (`prompt.txt` +
+`image*.png|jpg|jpeg|webp`, до `max_images` референсов);
+`cache/embeds/` — кэш эмбеддингов, `cache/models/` — квантование и веса энкодеров;
 `hf-cache/` — веса; `out/` — результаты (`out/tests/` — только артефакты тестов); `tests/` — обычные скрипты-проверки (pytest в venv нет и
-ставить нельзя; успех = `ALL PASS` + exit 0, без CUDA скрипт печатает `SKIP`),
-`tests/reference.json` — эталонные sha256 для `check-parity`; `tools/parity_refs.py` — как эталоны
-снимались старым кодом (сам код удалён);
+ставить нельзя; успех = `ALL PASS` + exit 0, без CUDA скрипт печатает `SKIP`);
 `.pi/skills/fusal-prompt/` — скилл по написанию промтов (адаптированная версия скилла из LoRA-репозитория, оригиналы — в `references/`).
 
 ## 2. Обязательные правила
@@ -83,28 +127,34 @@ MiniMax-H3-Image: T2I + edit на модульном пайплайне diffuser
 команда не правит ядро. Минимальный контракт:
 
 ```
+python -m qwenstyle gen --preset strong --prompt <имя> [--seeds 84,32-38 | --count N]
+                                # главная точка входа: папка promts/<имя>/ (prompt.txt + image*)
+                                # -> out/<имя>/gen-YYYYMMDD-HHMM/ (кадры, run.log, meta.json в корне)
+                                # --dry-run — план без весов; --no-logs — без run.log
 python -m qwenstyle run [--preview | --size 768p | --resolution N] [--aspect 16:9|4:3|1:1] [--prompt-file ...] [--input ...] --out ...
                                 # одиночный кадр: все флаги старого run_style.py + --config/--set
                                 # --input необязателен: нужен ли референс, решает `Capabilities.requires_image`
-                                # --dry-run (план без весов) / --check-parity (сверка sha256 с эталоном)
+                                # --dry-run (план без весов)
                                 # лог: <кадр>/run.log + meta.json рядом с кадром; --no-logs — не создавать
-python -m qwenstyle batch       # N seed'ов за одну загрузку + пакетный апскейл (бывший tools/batch_seeds.py)
+python -m qwenstyle selftest --profile weak|strong|flagship   # установка: окружение, веса профиля, рендер 480p/4 шага
 python -m qwenstyle env         # версии, CUDA/GPU/VRAM/RAM, offline-режим, счётчики кэшей, свободный диск
 python -m qwenstyle models list|probe <repo> [--offline]   # реестр бекендов и зондирование без скачивания
+python -m qwenstyle models download --profile <имя> [--dry-run] [--probe] [--yes]   # план/проверка доступа/загрузка
 python -m qwenstyle models download <repo> [--dry-run] [--yes]   # план файлов/размера, само скачивание только с --yes
-python -m qwenstyle cache list [--resolution 640] [--json]  # файлы, размер, ключевые параметры, возраст
+python -m qwenstyle cache list [--resolution 640] [--json]  # файлы в cache/embeds, размер, ключевые параметры, возраст
 python -m qwenstyle cache show <name|prefix>                # метаданные записи (сайдкар .json)
 python -m qwenstyle cache prune [--keep-per-resolution 1] [--group-by prompt|image]
                                 [--older-than 30d] [--legacy] [--all] [--apply]
 python -m qwenstyle compare-upscale --input <png> --height 960   # метрики апскейлеров на одном кадре
 python -m qwenstyle bench vram --resolution 640 --input <png>   # пик VRAM/RSS по фазам (бывший tools/measure_vram.py; --input обязателен)
-python -m qwenstyle check-parity                       # паритет sha256 со всеми записями tests/reference.json
-python -m qwenstyle config show base [--set a.b=c]      # резолвленный RunConfig (единственный источник)
+python -m qwenstyle config show base [--set a.b=c] [--explain-params]   # резолвленный RunConfig (единственный источник)
 hf cache verify <repo>                                  # целостность весов (вне пакета)
 ```
 
 Пресеты — `qwenstyle/presets/*.yaml`, только данные (`extends:` = deep-merge, без кода), читаются
-через `RunConfig.from_profile(<имя>)`:
+через `RunConfig.from_profile(<имя>)`. **Публичные (13)** — `weak-*` / `strong-*` (по 4) и 5
+флагманских; они адресуются профилем машины (`profiles.py`, §0) и только они попадают в README.
+Остальные — dev-пресеты (см. `docs/DEVELOPMENT.md`), публичные шаги на их имена не опираются:
 
 | пресет | что это | модель / шаги / кэш точности |
 |---|---|---|
@@ -135,18 +185,19 @@ hf cache verify <repo>                                  # целостность
   `--group-by image` — строже: ровно один кеш на разрешение по картинке, старые промты вытесняются;
 - `cache prune --apply` остаётся для ручной уборки (дубли на одном crop, `--older-than`, `--legacy`);
 - мёртвые записи старой схемы (без хеша картинки) чистятся только явно: `cache prune --legacy --apply`;
-- `check-parity` и `bench` (vram/encoder) всегда идут с `cache_supersede=none`: регресс-тест и замер —
-  не обслуживание кэша, они не вытесняют и не удаляют ни одной записи (паритет печатает это одной строкой);
-- `cache/fp8_transformer*` не чистится никогда (пересборка = 26 s каста + 6.7 ГБ записи).
+- `bench` (vram/encoder) и `selftest` всегда идут с `cache_supersede=none`: замер и проверка —
+  не обслуживание кэша, они не вытесняют и не удаляют ни одной записи;
+- `cache/models/fp8_transformer*` не чистится никогда (пересборка = 26 s каста + 6.7 ГБ записи).
 
 Требования к CLI: `--help` у каждой подкоманды, значения по умолчанию = проверенные (см. §4),
 никаких интерактивных подтверждений для read-only операций, удаление — только с явным флагом.
 
-Логи прогона: `run`/`batch` кладут отладочный лог в подпапку результата — `<кадр>/run.log` +
-`<кадр>/meta.json` (папка = путь кадра без расширения, `qwenstyle/runlog.py`), у батча —
-`<out-dir>/_logs/<stamp>/run.log`. Выключается `--no-logs` (или `logs: false` в пресете). Лог —
-наблюдение: ключ кэша эмбеддингов и кадр от него не зависят, ошибка записи не роняет прогон;
-`check-parity`/`bench`/тесты ходят в `pipeline.run(..., log=None)` и папок не оставляют. Тесты
+Логи прогона: `run` кладёт отладочный лог в подпапку кадра — `<кадр>/run.log` +
+`<кадр>/meta.json` (папка = путь кадра без расширения, `qwenstyle/runlog.py`), а `gen` — один
+`run.log` + `meta.json` в корне папки сессии `out/<имя>/gen-<штамп>/`. Выключается `--no-logs`
+(или `logs: false` в пресете). Лог — наблюдение: ключ кэша эмбеддингов и кадр от него не зависят,
+ошибка записи не роняет прогон;
+`bench`/`selftest`/тесты ходят в `pipeline.run(..., log=None)` и папок не оставляют. Тесты
 пишут результаты только в `out/tests/`, а промт берут из `tests/texts/exp1.txt` (не из `promts/`,
 он в `.gitignore`).
 Вся новая логика добавляется в подкоманду (`qwenstyle/cmd/<name>.py`), а не в ядро; монолиты
@@ -199,6 +250,10 @@ sha256 картинки попадает сегмент `noref` (`io.NOREF_SHA`)
 
 ## 3. Что и почему кэшируется сейчас
 
+Пути в таблице записаны до миграции шага 4 (кеши разделены): `cache/fp8_transformer*` →
+`cache/models/fp8_transformer*`, `cache/weights/…` → `cache/models/weights/…`, `cache/embeds_*` и
+`cache/text_embeds_*` → `cache/embeds/`. Ключи и содержимое записей не менялись.
+
 | Кэш | Где | Что экономит |
 |---|---|---|
 | Веса модели и LoRA | `hf-cache/hub/...` (32 GiB, `blobs/` + относительные симлинки) | 31 GiB + 419 MiB загрузки + запросы к Hub |
@@ -225,7 +280,7 @@ sha256 картинки попадает сегмент `noref` (`io.NOREF_SHA`)
 для GPU-режима (`--set encoder.device=cuda --set encoder.prefetch=4` — он же умолчание на машине
 с CUDA): в VRAM живёт один модуль, ключ тот же, а устройство энкода уже отражено сегментом
 `-dev-cuda`. Уборка устаревших записей — только отложенная задача `cache_supersede` в конце
-`run`/`batch` (R2), никогда во время энкода.
+`run`/`gen` (R2), никогда во время энкода.
 
 Для `h3-image` тот же `streaming.py` читает **Qwen3-VL-32B** (62.13 GiB), но фаза энкодера идёт
 **отдельным процессом** (`encode() → _encode_in_child`): на этой машине mmap файла списывается в
@@ -445,14 +500,11 @@ pinned-буфер всё же не выделился. Цена: H2D 20.5 вме
 
 **Проверки корректности (не ломать при доработках):**
 - Генерация детерминирована: два прогона с одним `--seed` дают max diff 0.
-- `python -m qwenstyle check-parity` покрывает 5 записей `tests/reference.json` (`base-640-8`,
-  `turbo-640`, `esrgan-x4`, `batch-2seeds`, `flux2-preview-8`) = 10 проверок; `flux2-preview-8` снят
-  новым каркасом (`--config preview`, 1376×768, 8 шагов, seed 20261113, sha256 `233b527c…`,
-  `out/_parity/`), три прогона подряд дали тот же sha256.
-- Необязательное поле `requires` в записи эталона (репозиторий Хаба или путь): если чего-то нет,
-  печатается `[skip] <entry>: <причина>`, запись не PASS и не FAIL, в итоговой строке — `skipped N`;
-  код возврата 0 при FAIL 0. На этой машине `skipped 0`.
-- Старт из `cache/fp8_transformer` даёт **бит-в-бит** тот же кадр, что inline-каст bf16→fp8 (max diff 0).
+- Эталонные кадры и команда сверки (parity) удалены в v0.1.0: сверка нового каркаса со старыми
+  монолитами была завершена до их удаления. Штатная проверка установки теперь —
+  `python -m qwenstyle selftest --profile <имя>` (окружение → веса профиля → один рендер 480p/4 шага),
+  проверка доступа к весам — `models download --profile … --probe`.
+- Старт из `cache/models/fp8_transformer` даёт **бит-в-бит** тот же кадр, что inline-каст bf16→fp8 (max diff 0).
 - Поэтому при загрузке fp8-кэша `from_pretrained(dtype=fp8)` нельзя применять «как есть»: он кастит ВСЁ, включая 67 не-fp8 тензоров (32.5 MiB — нормы, patch/pos-embed, proj_in/out), а буферы `persistent=False` (синусоидальные `freqs`) в файл весов не попадают вообще. Не-fp8 тензоры читаются с диска точно, буферы — из sidecar; без этого forward падает с `Promotion for Float8 Types is not supported` или картинка меняется целиком.
 
 **Профили `--model` (замеры):**
@@ -493,21 +545,20 @@ pinned-буфер всё же не выделился. Цена: H2D 20.5 вме
 
 `--upscale-backend esrgan` (по умолчанию) — Real-ESRGAN x4plus_anime_6B:
 
-- веса `cache/weights/RealESRGAN_x4plus_anime_6B.pth` (17.9 МиБ, sha256 `f872d837…`), качаются сами из официального GitHub-релиза при отсутствии;
+- веса `cache/models/weights/RealESRGAN_x4plus_anime_6B.pth` (17.9 МиБ, sha256 `f872d837…`), качаются сами из официального GitHub-релиза при отсутствии;
 - своя реализация RRDBNet на чистом torch — без `basicsr` (он не собирается под torch 2.8 / Windows);
 - `--upscale 4` — x4, `--upscale 2` — x4 и уменьшение вдвое (LANCZOS), `0` — выкл.;
 - тайловый инференс (`--upscale-tile`, по умолчанию 256, pad 32): на текущем стеке тайлы дают
-  **max diff 7** (из 255) к прогону всего кадра — это не ошибка каркаса: старый `upscale.py` давал
-  ровно то же, а сверка old-vs-new теперь живёт в `python -m qwenstyle check-parity`
-  (запись `esrgan-x4`, сравнение sha256); при `tile=128` нужен `pad=32`;
-- в батче (`python -m qwenstyle batch`) ширина финального кадра считается по пропорциям **готового**
-  кадра: старый `--out-res 1024` даёт 1376×768, новый `--upscale-to 768p` — 1382×768 (высота
-  совпадает). На чистую генерацию `s{N}-gen.png` это не влияет — именно её и сверяет `check-parity`;
+  **max diff 7** (из 255) к прогону всего кадра — это не ошибка, а свойство тайлового режима
+  (старый `upscale.py` давал ровно то же); при `tile=128` нужен `pad=32`;
+- в `gen` ширина финального кадра считается по пропорциям **готового** кадра: чистая генерация
+  лежит рядом как `s{N}-gen.png`, а `s{N}.png` — уже апскейленная;
 - замеры: 864×480 → 3456×1920 за 0.4 с, 1376×768 → 5504×3072 за 1.5 с, пик VRAM апскейлера < 1 ГиБ;
 - перед ESRGAN пайплайн освобождается (`del pipe` + `gc` + `empty_cache`): иначе пик 16 ГиБ + апскейлер = OOM. Общий пик прогона с апскейлом — 8.5 ГиБ (измерено);
 - в имя файла добавляется `-x{2|4}` вместе с `-s{seed}`, чтобы gen- и out-файлы не сталкивались.
 
-`--upscale-backend seedvr2` — SeedVR2-3B (ByteDance), **установлен и работает** (см. ниже):
+`--upscale-backend seedvr2` — SeedVR2-3B (ByteDance), **dev-опция, не входит в публичные профили**
+(в публичных пресетах только `esrgan`, см. `docs/DEVELOPMENT.md`):
 
 - отдельное окружение `seedvr2/`: venv 5.1 ГиБ (torch 2.3 cu121 / diffusers 0.29.1 / transformers 4.38.2), репо `ByteDance-Seed/SeedVR`, веса `ckpts/seedvr2_ema_3b.pth` 12.6 ГиБ + `ema_vae.pth` 0.93 ГиБ;
 - обёртка `seedvr2/run_image.py` — один кадр, 1 шаг, цель `--width/--height` (кратна 16);
@@ -763,15 +814,14 @@ done
 из высоты: 1440 / 1088 → ×1.32), поэтому чистый кадр без поста — только с
 `--set upscale.target_height=0`.
 
-Батч по seed'ам — вместо `tools/batch_seeds.py` теперь `python -m qwenstyle batch`
-(`--config preview-qwen --seed-range 0-9 --upscale-to 768p --out-dir out/batch …`): пайплайн грузится
-один раз, апскейл — после его выгрузки, имена `s{N}-gen.png`/`s{N}.png`, `--resume` по умолчанию.
-Эмбеддинги батч **не создаёт** — при промахе печатает готовую команду `run`. Ширина финала считается
-по пропорциям готового кадра (§4): `--upscale-to 768p` ≈ старый `--out-res 1024`, но 1382 px вместо 1376.
+Серия кадров по seed'ам — `python -m qwenstyle gen --preset strong --prompt <имя> --count 9`
+(или `--seeds 0-9`): пайплайн грузится один раз, апскейл — после его выгрузки, имена
+`s{N}.png` (+ `s{N}-gen.png` чистая генерация), `run.log` и `meta.json` — в корне папки сессии.
+Эмбеддинги `gen` **не создаёт** — при промахе печатает готовую команду `run`.
 
 ## 7. Открытые долги
 
-- **D2.** ✅ CLI есть и единственный: `python -m qwenstyle run|batch|env|cache|models|compare-upscale|bench|check-parity`
+- **D2.** ✅ CLI есть и единственный: `python -m qwenstyle gen|run|selftest|env|cache|models|compare-upscale|bench|config`
   (`qwenstyle/cli.py` + `qwenstyle/cmd/*.py`). Монолиты `run_style.py`, `upscale.py`, `colorfix.py`,
   `tools/{cli,batch_seeds,measure_vram,upscale_compare}.py` удалены на шаге 11 переезда (git нет —
   восстанавливать неоткуда). Политика кэша: один кеш на разрешение, смена разрешения ничего не удаляет,
