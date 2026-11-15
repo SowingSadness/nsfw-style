@@ -1,0 +1,11 @@
+# turbo: Turbo-трансформер (расписание 8 шагов) + свой LoRA R128; text-encoder и VAE базовые.
+# Наследует всё остальное у base.yaml (deep-merge по ключам).
+extends: base
+
+generation:
+  transformer: [Qwen/Qwen-Image-2.1-Turbo, transformer]
+  lora:
+    filename: fusal-qwen-image-2.1-turbo-e6-preview-r128.safetensors
+    strip_alpha: true      # 224 per-module alpha (=128) вырезаются, грузится state dict
+  steps: 8                 # фиксировано расписанием sample_sigmas из model_index.json
+  precision_cache: cache/fp8_transformer_turbo   # другая модель -> другой fp8-кэш

@@ -1,0 +1,9 @@
+fusal style. [TASK: TEXT_TO_IMAGE]
+[Subject] One young girl sitting among wrapped presents.
+[Appearance] Long blonde hair in a side ponytail, green eyes. Wearing a red and white Santa-style crop top, pleated skirt, gloves, and boots with white fur trim. She has a red headband with white pom-poms.
+[Pose] Sitting with legs sprawled apart, one leg raised. Both hands clutch a gift box against her chest.
+[Expression] Looking at the viewer with slightly parted lips and a curious gaze.
+[Composition] Medium-full shot from a slightly high angle. Centered subject partially obscured by foreground gifts.
+[Environment] A dark space filled with numerous wrapped gift boxes in red, gold, and white, adorned with ribbons and glowing string lights.
+[Lighting] Warm, festive lighting with glowing starburst highlights and soft shadows.
+[Style] Anime illustration with fine brown outlines, soft skin gradients, crisp fabric shadows, warm red and gold colors, glossy highlights, and glowing golden starbursts against a dark background.

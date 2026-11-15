@@ -1,0 +1,18 @@
+# full-flux2: финальный кадр FLUX.2 klein (прежнее имя — `full`) — рендер сразу в 1440p (2592x1440 при 16:9)
+# с блоковым offload, потому что с 1080p и выше VRAM упирается в 16.0 GiB и torch
+# начинает спиллить в shared memory (замер: 1440p без offload 285 с, с offload 111 с).
+#
+# Замеры на RTX 4080 16 GiB (8 шагов, вход 864x480):
+#   1440p + offload group (2 блока/стрим) -> 111 с, пик VRAM 15707 MiB
+#   без offload                           -> 285 с, пик VRAM 16033 MiB (спилл)
+extends: flux2
+
+size_px: 1440
+
+generation:
+  steps: 8                  # klein distilled: 8 шагов — рабочий оптимум (4 тоже валидны, ~57 с)
+  offload: group
+  sampler_kwargs:
+    guidance_scale: 4.0
+    offload_blocks: 2       # блоков трансформера на GPU одновременно
+    offload_stream: 1       # асинхронная префетч-стрим загрузки блоков

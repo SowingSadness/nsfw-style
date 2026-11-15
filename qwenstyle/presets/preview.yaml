@@ -1,0 +1,11 @@
+# preview: быстрый черновик на FLUX.2 klein — 768p (1376x768 при 16:9), 8 шагов.
+# Замер: генерация 33 с, пик VRAM ~15.3 GiB (offload не нужен, порог — 960p).
+# Один CPU-энкод на резолюцию (~150 с, энкодер Qwen3ForCausalLM на CPU), дальше итерации дешёвые.
+#
+# Черновик на Qwen-Image-2.1 (480p + 8 шагов) переехал в presets/preview-qwen.yaml.
+extends: flux2
+
+size_px: 768
+
+generation:
+  steps: 8

@@ -1,0 +1,18 @@
+fusal style.
+[TASK: TEXT_TO_IMAGE]
+
+[Subject] One young woman lounging back on a dark gray couch, viewed from a floor-level low angle.
+
+[Appearance] Purplish-brown hair in twin buns with long ribbons and one yellow-green butterfly clip on the right. Blue eyes. She wears a sleeveless black high-slit cheongsam (no chest cutout) with gold embroidery on the collar and hanging inner hem, an oversized tan pinstripe blazer draped loosely over both elbows off her shoulders, black elbow-length gloves with a silver bracelet on her left wrist, and sheer black thigh-high stockings with a garter strap visible on her hip.
+
+[Pose] Slouching back deeply into the couch. Her legs are asymmetrically extended into the bottom foreground: one leg stretches straight diagonally to the bottom-left corner with toes touching the floor, while the other leg extends forward underneath with the stockinged sole facing directly into the bottom-center camera lens in extreme foreshortening. Her right arm extends along the couch backrest, and her gloved left hand rests flat on the right armrest.
+
+[Expression] Half-closed eyes, soft blush, and a faint, smug, relaxed smile, looking down at the viewer from above.
+
+[Composition] Full body shot, extreme low-angle floor-level perspective, wide horizontal framing. Prominent foreshortened foot in the bottom-center foreground, framed by a pedestal table on the left and oversized high heels in the bottom-right foreground.
+
+[Environment] Warm, dimly lit room with vertical wood paneling. Two floor lamps with glowing trapezoidal lampshades are fully visible flanking the couch. A dark round single-pedestal table on the left holds two empty stemmed wine glasses and two wine bottles labeled "ARGENTO". A pair of glossy black Mary Jane high heels sits in the bottom-right foreground.
+
+[Lighting] Rich warm golden-brown ambient lighting, soft overhead glow, and bright warm illumination radiating from the two lampshades. Floating golden dust particles fill the air.
+
+[Style] Anime-style illustration; painterly soft shading, rich warm color palette, detailed sheer fabric and stocking rendering, and atmospheric cinematic lighting.

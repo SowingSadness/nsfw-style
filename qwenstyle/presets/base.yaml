@@ -1,0 +1,49 @@
+# base: Qwen-Image-2.1 + FUSAL R80, 25 шагов, fp8-трансформер — дефолтный профиль проекта.
+# Значения 1:1 с прежним run_style.py (PROFILES["base"] и defaults argparse).
+# Файл — только данные: код живёт в qwenstyle/backends/*, читается через RunConfig.from_profile().
+#
+# `upscale.target_height` здесь НЕ задаётся: апскейл до фиксированной высоты — частный случай
+# (presets/demo.yaml), иначе он протекал бы во все наследники, включая нативный 1440p в full-flux2.
+encoder:
+  # Дефолтный энкодер — Heretic-1.3.0 (D7): именно на его conditioning обучался LoRA, так что
+  # он ближе к трейну, чем штатный Qwen3VL-8B. Откат к штатному — `--text-encoder base`
+  # (или `--set encoder.name=base`): это другая запись кэша (`_te-heretic` vs без тега).
+  # Пресет `anime` пинит штатный энкодер явно (presets/anime.yaml).
+  name: heretic
+  cache_tag: heretic       # -> в имени кэша эмбеддингов сегмент _te-heretic
+  # Подсказка для скачивания: у heretic-бекенда `local_weights=True`, поэтому веса берутся из
+  # local_dir, а repo/revision нужны только для команды в тексте ошибки (missing_message).
+  repo: DreamFast/Qwen3-VL-8B-Heretic-1.3.0
+  revision: 28dc0129b4c7c16304bc2ed3697c9437ae8ac2f3
+  local_dir: cache/weights/heretic-te
+  requires_vision: true
+  dtype: bfloat16
+  # `auto` = GPU, если CUDA доступна (и тогда же включается стриминг весов + prefetch=4),
+  # иначе CPU. CPU — только явным `--set encoder.device=cpu` (он же даёт легаси-имя кэша).
+  device: auto
+
+generation:
+  backend: qwen_image21
+  repo: Qwen/Qwen-Image-2.1
+  transformer: [Qwen/Qwen-Image-2.1, transformer]
+  lora:
+    repo: MicksHF/Qwen-Image-2.1-Anime-Fusal
+    filename: fusal-qwen-image-2.1-v2-exact-r80.safetensors
+    scale: 0
+    strip_alpha: false
+  steps: 25
+  guidance: 1.0
+  precision: fp8
+  precision_cache: cache/fp8_transformer
+  offload: none
+  sampler_kwargs: {}
+
+upscale:
+  backend: esrgan           # x4plus_anime_6B; seedvr2 — флагом --upscale-backend seedvr2
+  factor: 0.0               # 0 = апскейл выключен
+  weights: cache/weights/RealESRGAN_x4plus_anime_6B.pth
+  tile: 256                 # тайлы — только esrgan (seedvr2 работает целым кадром)
+  pad: 32                   # только esrgan
+  color_fix: wavelet        # только seedvr2: none | wavelet | reinhard (--upscale-color-fix)
+  color_strength: 0.75
+  color_sigma: 12.0

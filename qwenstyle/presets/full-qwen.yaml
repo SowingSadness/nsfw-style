@@ -1,0 +1,20 @@
+# full-qwen: тот же финальный кадр, что у `full` (высота 1440 после апскейла), но на
+# Qwen-Image-2.1 + FUSAL R80 и с рендером до апскейла 1080p (у `full-flux2` рендер нативный 1440p).
+#
+# 1080p для Qwen уже требует блокового offload: на 960p VRAM упирается в потолок 16 GiB,
+# выше — спилл в shared memory. Поэтому `offload: group` и один блок на GPU (минимум VRAM).
+# Апскейл Real-ESRGAN x4 с ресемплом до 1440: 1440 / 1080 = 1.333.
+extends: base
+
+size_px: 1080
+
+generation:
+  steps: 25                # базовый профиль Qwen: 25 шагов (distill-расписания тут нет)
+  offload: group
+  sampler_kwargs:
+    offload_blocks: 1      # блоков трансформера на GPU одновременно (больше = быстрее, больше VRAM)
+
+upscale:
+  backend: esrgan            # x4plus_anime_6B; seedvr2 — флагом --upscale-backend
+  factor: 0.0              # считается из target_height: 1440 / 1080 = 1.333
+  target_height: 1440

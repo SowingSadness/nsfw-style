@@ -1,0 +1,62 @@
+# flux2: FLUX.2 (diffusers Flux2KleinPipeline) — conditioning=internal, multi-reference.
+# Файл — только данные: код живёт в qwenstyle/backends/flux2.py, читается через RunConfig.from_profile().
+#
+# ВАЖНО: веса этой модели в проекте ещё НЕ скачаны (шаг 9 плана — только каркас). Ни одна команда
+# этого пресета не ходит в сеть: при отсутствии hf-cache будет понятная ошибка / «нет данных».
+#
+# Что уже известно (метаданные Хаба через `models probe`, commit 3bfbda104230, веса не качались):
+#   _class_name = Flux2KleinPipeline  (НЕ Flux2Pipeline)
+#   text_encoder = transformers.Qwen3ForCausalLM   15.3 GiB  (НЕ Mistral3, vision-башни нет)
+#   transformer  = diffusers.Flux2Transformer2DModel 16.9 GiB
+#   vae          = diffusers.AutoencoderKLFlux2      160.3 MiB
+#   всего по репозиторию ~49.3 GiB (трансформер лежит дважды: root + transformer/)
+# Класс пайплайна и энкодера бекенд выбирает сам по model_index.json из hf-cache, поэтому пресет
+# описывает только то, чего в model_index нет.
+#
+# Намеренно БЕЗ `extends`: FLUX.2 переопределяет весь `encoder` и весь `generation`, а от base
+# наследовался бы только блок `upscale` — ценой того, что любая правка Qwen-профиля (или случайный
+# ключ вроде `upscale.target_height`) протекала бы во всё FLUX.2-дерево. Дублируем 8 строк апскейла
+# осознанно: это цена независимости двух семейств профилей.
+
+encoder:
+  # Имя локальное (для реестра qwenstyle/backends/encoders.py не используется): энкодер FLUX.2
+  # грузит сам бекенд из generation.repo — там лежит его 15.3-ГиБ текстовый Qwen3ForCausalLM.
+  name: qwen3
+  repo: darknight9121/FLUX.2-klein-base-9B-bucket-uncensored   # уточнено `models probe`
+  cache_tag: qwen3         # -> в ключе кэша эмбеддингов будет сегмент _te-qwen3
+  requires_vision: false   # Qwen3ForCausalLM — текстовая модель; референсы видит только VAE
+  dtype: bfloat16
+  # `auto` -> `cuda` на машине с CUDA, и тогда же включается GPU-стриминг (`stream=True`,
+  # `prefetch=4`); на машине без CUDA — прежний `cpu`/`stream=False`. В VRAM живёт один модуль
+  # (~1.5 GiB), а не 15.26 GiB весов целиком — они приезжают с диска по ходу forward.
+  # Замер (`bench encoder`, 512 токенов): 8.5 s против 76.8 s на CPU, peak_uss 4.75 вместо 16.14 GiB.
+  # ВАЖНО: GPU-энкод ≠ CPU-энкод (bf16, `max |diff|` до 8.25), поэтому устройство входит в имя
+  # записи (`-dev-cuda`): CPU- и GPU-эмбеддинги сосуществуют и друг друга не вытесняют.
+  device: auto
+
+generation:
+  backend: flux2
+  repo: darknight9121/FLUX.2-klein-base-9B-bucket-uncensored
+  transformer: null        # бекенд берёт трансформер из repo; поле нужно только гибридным профилям
+  lora: null               # FUSAL R80 — адаптер Qwen-Image-2.1, к FLUX.2 неприменим
+  steps: null              # null = дефолт пайплайна (num_inference_steps=50); число не выдумано
+  guidance: 4.0            # guidance_scale по умолчанию у __call__; у distilled-модели игнорируется
+  precision: fp8           # 16.9 GiB bf16 в 16 GiB VRAM не влезает; fp8 — ~8.5 GiB
+  precision_cache: cache/fp8_transformer_flux2   # другая модель -> свой fp8-кэш
+  offload: none            # варианты: none | group | model_cpu (если fp8 не влезет — group)
+  sampler_kwargs:
+    guidance_scale: 4.0    # дублирует guidance намеренно: это аргумент pipe(...)
+    # text_encoder_out_layers не задаём: у Flux2KleinPipeline дефолт (9, 18, 27), у Flux2Pipeline
+    # (10, 20, 30) — бекенд берёт правильный из PIPELINE_SPECS по model_index.json.
+    max_sequence_length: 768                # хватает на ~3800 символов промта; больше = лишний CPU-энкод
+    # caption_upsample_temperature: 0.15    # есть только у Flux2Pipeline; Klein это игнорирует
+
+upscale:
+  backend: esrgan           # x4plus_anime_6B; seedvr2 — флагом --upscale-backend
+  factor: 0.0               # 0 = апскейл выключен (target_height задаёт только demo)
+  weights: cache/weights/RealESRGAN_x4plus_anime_6B.pth
+  tile: 256                 # тайлы — только esrgan (seedvr2 работает целым кадром)
+  pad: 32                   # только esrgan
+  color_fix: wavelet        # только seedvr2: none | wavelet | reinhard
+  color_strength: 0.75
+  color_sigma: 12.0

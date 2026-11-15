@@ -1,0 +1,56 @@
+# h3-image: MiniMax-H3-Image — T2I и edit одним пайплайном, 6 фиксированных шагов (PDD).
+# Файл — только данные: код живёт в qwenstyle/backends/minimax_h3_image.py, читается через
+# RunConfig.from_profile("h3-image").
+#
+# Что проверено по установленному снапшоту (`hf-cache/…/models--MiniMaxAI--MiniMax-H3-Image`,
+# commit 5f9047302397, 64 GiB) — см. `.pi/runs/…/plan.md`:
+#   transformer_diffusers/  61.7 GiB, MiniMaxH3ImageTransformer2DModel, 33.13B, 50 слоёв,
+#                           hidden 5376, in_channels 24, patch [1,2,2], text_dim 5120
+#   vae_diffusers/           2.2 GiB, AutoencoderKLMiniMaxH3Image, 584M, 24 латентных канала
+#   pdd_fused_heads.safetensors 12 MiB — по голове на шаг; pdd_config.json — 6 шагов и сигмы
+#   processor/ + tokenizer/ (Qwen3VLProcessor, Qwen2TokenizerFast), scheduler/
+# Пайплайн есть в нашей diffusers 0.43.0.dev0: `MiniMaxH3ImageModularPipeline`, он же сам
+# выбирает режим (есть `image` -> image_conditioned, нет -> text2image).
+#
+# `extends: base` даёт блок `upscale` и общие умолчания; всё, что относится к Qwen-Image-2.1
+# (трансформер, LoRA, fp8-кэш, offload), переопределено ниже — иначе оно протекло бы по deep-merge.
+extends: base
+
+size_px: 1024                # высота кадра при --aspect 16:9 -> 1:1 это 1024x1024
+
+encoder:
+  # Qwen3-VL-32B: H3-Image читает hidden state после 50-го decoder layer (hidden 5120, vocab 151936).
+  # Ни 8B-энкодеры проекта (hidden 4096), ни FLUX.2-энкодер не подходят — text_dim жёстко 5120.
+  # Решение по весам: heretic-32B (интерфейс 1:1 с официальным: тот же класс, hidden 5120,
+  # 64 слоя, vision 27/1152/out 5120). Официальный `text_encoder/` из H3-репозитория (62 ГиБ) не качаем.
+  name: h3qwen32-heretic
+  repo: llmfan46/Qwen3-VL-32B-Instruct-ultra-uncensored-heretic
+  revision: c44b949b30d111666a5ed9851c5cd633ed39b070   # commit heretic-32B в hf-cache (шаг 5)
+  # `local_dir` намеренно не задан: умолчание бекенда — cache/weights/h3qwen32-heretic
+  # (пересобранные шарды < 40 GiB). В hf-cache шард 46.5 GiB, а safetensors 0.8.0 на Windows
+  # падает на файлах ≥ ~40 GiB, поэтому веса читаются из cache/weights (как у heretic-8B, D7);
+  # repo/revision остаются в ключе кэша и в тексте ошибки, а не задают путь загрузки.
+  local_dir: null
+
+  cache_tag: h3qwen32-heretic   # -> сегмент `_te-h3qwen32-heretic` в имени записи text_embeds
+  requires_vision: true
+  dtype: bfloat16
+  # 62.1 GiB bf16 в 63.6 GiB RAM вместе с активациями не влезают -> стриминг по слоям обязателен.
+  # `auto` на машине с CUDA разрешается в `cuda` и сам включает stream=True/prefetch=4 (он же
+  # отключает pinned-память при offload=group — см. AGENTS.md §4); на машине без CUDA останется CPU.
+  device: auto
+  stream: true
+  prefetch: 4
+
+generation:
+  backend: minimax_h3_image
+  repo: MiniMaxAI/MiniMax-H3-Image
+  transformer: null          # трансформер берётся из repo (transformer_diffusers/), подмены нет
+  lora: null                 # FUSAL R80 обучен на Qwen-Image-2.1 — к H3 неприменим
+  steps: 6                   # = pdd_config.json; num_inference_steps пайплайн игнорирует
+  guidance: 1.0              # guider/negative_prompt у пайплайна нет — значение не используется
+  precision: fp8             # 61.7 GiB bf16 в 16 GiB VRAM не влезает; fp8 -> 30.9 GiB
+  precision_cache: cache/fp8_transformer_h3_image   # другая модель -> свой кэш (шаг 3/4)
+  offload: group             # 30.9 GiB fp8 всё равно больше VRAM: блоки в RAM, на GPU одна группа
+  sampler_kwargs:
+    offload_blocks: 1        # блоков трансформера на GPU одновременно (минимум VRAM)

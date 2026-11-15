@@ -1,0 +1,29 @@
+extends: base
+
+# anime: профиль с низкой силой LoRA (0.3) для мягкого переноса стиля.
+# Энкодер — штатный Qwen3VL-8B (а не дефолтный heretic из base.yaml): пресет пинит его явно,
+# чтобы смена дефолта в base.yaml не меняла conditioning этому профилю.
+encoder:
+  name: base
+  cache_tag: base          # -> в имени кэша эмбеддингов нет сегмента _te-* (легаси-записи валидны)
+  repo: Qwen/Qwen-Image-2.1
+  revision: null
+  local_dir: null
+
+size_px: 1080
+
+generation:
+  steps: 25                # базовый профиль Qwen: 25 шагов (distill-расписания тут нет)
+  offload: group
+  sampler_kwargs:
+    offload_blocks: 1      # блоков трансформера на GPU одновременно (больше = быстрее, больше VRAM)
+  lora:
+    repo: MicksHF/Qwen-Image-2.1-Anime-Fusal
+    filename: fusal-qwen-image-2.1-v2-exact-r80.safetensors
+    scale: 0.3
+    strip_alpha: false
+
+upscale:
+  backend: esrgan            # x4plus_anime_6B; seedvr2 — флагом --upscale-backend
+  factor: 0.0              # считается из target_height: 1440 / 1080 = 1.333
+  target_height: 1440

@@ -1,0 +1,15 @@
+.venv/
+cache/
+out/
+imgs/
+promts/
+hf-cache/
+seedvr2/
+.pi/
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+tmp*
+tests/check-tiny/
