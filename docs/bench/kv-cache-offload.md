@@ -1,6 +1,7 @@
 # Замер: `kv_cache=offload` на реальном кейсе `nita-camp` (3 референса)
 
-Три режима `generation.sampler_kwargs.kv_cache` (`true` — по умолчанию, `offload`, `false`) на
+Режимы `generation.kv_cache` (`true`, `offload`, `false`; с появления авто-режима умолчание в
+`presets/base.yaml` — `auto-offload-ref2`: `true` на одном референсе, `offload` на двух и более) на
 реальных весах — тот же кейс, который владелец гоняет руками: `prompts/nita-camp/`
 (3 референса `image1..3.png` + `prompt.txt`), seed 84, 1376×768, 8 шагов.
 
@@ -19,7 +20,7 @@ fp8-кэш трансформера на диске, прогретый page cac
 ```bash
 PYTHONIOENCODING=utf-8 HF_HUB_OFFLINE=1 .venv/Scripts/python.exe -m qwenstyle gen \
     --preset strong-preview --prompt nita-camp --aspect 16:9 --seeds 84 \
-    [--set generation.sampler_kwargs.kv_cache=offload|false] \
+    [--set generation.kv_cache=offload|false] \
     [--set generation.offload=group]
 ```
 
@@ -154,7 +155,7 @@ PYTHONIOENCODING=utf-8 HF_HUB_OFFLINE=1 .venv/Scripts/python.exe -m qwenstyle ru
     --input prompts/imgs/7543c17f-c1c8-4080-81bd-60ac7e01110c.png \
     [--input prompts/imgs/ire0nita-store.png] \
     --set upscale.target_height=0 \
-    --set generation.sampler_kwargs.kv_cache=true|offload \
+    --set generation.kv_cache=true|offload \
     --out out/benchkv/a1.png
 ```
 

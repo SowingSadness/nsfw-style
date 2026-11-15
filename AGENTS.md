@@ -26,6 +26,11 @@ FUSAL (R80 v2), img2img с сохранением композиции. Inferenc
 Аниме — опция: ветки `*-anime` включают адаптер FUSAL 0.7; пресеты без суффикса работают без
 стилевого адаптера.
 
+Референсы и память: все публичные пресеты наследуют `presets/base.yaml`, где
+`generation.kv_cache: auto-offload-ref2` — то есть **один референс = K/V в VRAM (быстро), 2+ =
+K/V в RAM (иначе OOM)**, цифры и порог — §4 «Префиксный KV-кеш». Переопределение:
+`--set generation.kv_cache=true|offload|false|auto-offload-ref2`.
+
 Жёсткие правила рекомендаций:
 
 - **8 ГБ VRAM — только `weak-*`**: там энкодер идёт на CPU (`encoder.device: cpu` + `stream: true`) и
@@ -118,7 +123,7 @@ MiniMax-H3-Image: T2I + edit на модульном пайплайне diffuser
 | текст промта, картинка, `crop` (`--size`/`--resolution`/`--aspect`), тег энкодера | **да** | в имени файла |
 | `encoder.dtype`, `encoder.device` | **да** | сегменты `-fp16` / `-dev-cuda` в имени. `device=auto` на машине с CUDA разрешается в `cuda`, поэтому запись по умолчанию получает `-dev-cuda`; `cpu`/`bfloat16` без сегмента — легаси-записи, они остаются валидными |
 | `encoder.repo`/`encoder.revision`, `CACHE_SCHEMA` | да, но только сверкой сайдкара | при попадании `.json` сверяется по белому списку; расхождение = промах с печатью изменившегося поля (`[cache] miss: изменился encoder_device …`). Поле `schema` пишут только записи нового формата: старые сайдкары его не содержат и считаются валидными (`EMBEDS_HIT_DEFAULTS`), поэтому bump `CACHE_SCHEMA` инвалидирует **только новые записи**, а legacy-сайдкары — нет |
-| `--seed`, `--steps`, `--lora-scale`, `--fp8`, `--offload`, `encoder.stream`/`prefetch`/`pin_memory`/`lookahead` | **нет** (бесплатные оси) | раскладка памяти и сэмплер, не conditioning |
+| `--seed`, `--steps`, `--lora-scale`, `--fp8`, `--offload`, `generation.kv_cache`, `encoder.stream`/`prefetch`/`pin_memory`/`lookahead` | **нет** (бесплатные оси) | раскладка памяти и сэмплер, не conditioning |
 
 Причина: GPU-энкод ≠ CPU-энкод по округлениям (`max|diff|` 128.0 по элементам на слоях 9/18/27),
 поэтому `dtype`/`device` — часть идентичности записи, а не «режим».
@@ -392,6 +397,42 @@ attention: спилл активаций (`free=0` на 10800 токенах) с
 - единственный содержательный рычаг для >1024 — вывести веса из VRAM (`--offload group`): он снимает
   6.6 GiB и делает 1280 рабочим (10.8 GiB, см. таблицу выше);
 - время прогона — это чистый forward (1.33 s/шаг @1024); `scheduler.step` и VAE-энкод (0.66 s) в балансе не значат ничего.
+
+**Префиксный KV-кеш референсов (`generation.kv_cache`).** Вторая (после весов) статья VRAM на
+многореференсных прогонах — это не активации, а **состояние**: `QwenImage21Pipeline` на шаге 0
+считает префикс (текст + **все** референсы) и при `causal_condition=true` кладёт K/V на каждый
+из 32 слоёв (`QwenImage21KVLayerCache`), чтобы остальные шаги считали только токены кадра.
+Цена ровно **512 КиБ на префиксный токен** (`32 слоя × 2 × 4096 × 2 Б`), то есть
+`KV_GiB ≈ 0.000488 × (≈1230 токенов текста + референсы × токены кадра)`;
+токены кадра: 768p — 4128, 1088p — 8160, 1440p — 14 400.
+
+| кейс (RTX 4080 16 ГБ) | `kv_cache` | генерация | пик VRAM | KV |
+|---|---|---|---|---|
+| 768p, 8 шагов, 1 реф (префикс 5358) | `true` | 14 s | 15.2 GiB | — |
+| ↑ | `offload` | 16 s (**+14 %**) | 11.5 GiB | 2.62 GiB в RAM |
+| 768p, 8 шагов, 2 рефа (9492) | `true` | **OOM шаг 0** | — | — |
+| ↑ | `offload` | 21 s | 12.0 GiB | 4.63 GiB в RAM |
+| 1088p, 25 шагов, 1 реф (9390) | `true` | 93 s | 13.7 GiB | — |
+| ↑ | `offload` | 105 s (**+12.9 %**) | **7.2 GiB** | 4.58 GiB в RAM |
+| 768p, 8 шагов, 3 рефа (nita-camp) | `true` | **OOM шаг 0** | — | — |
+| ↑ | `offload` | 24 s | 13.1 GiB | 6.54 GiB в RAM |
+
+Режимы (`ParameterSpec` в `qwenstyle/backends/qwen_image21.py`, поле ядра `GenerationConfig.kv_cache`,
+умолчание `presets/base.yaml` — **`auto-offload-ref2`**):
+
+- `auto-offload-ref2` — `true` при **одном** референсе, `offload` при **2+** (умолчание;
+  закрывает ровно тот случай, где `true` падает); разрешается в `_resolve_kv_cache` в `generate`;
+- `true` — K/V в VRAM (быстрее всего; потолок — объём префикса, не разрешение);
+- `offload` — K/V в **pageable RAM**, подкачка послойно (`qwenstyle/backends/qwen_kv.py`, патч
+  `store`/`get` класса кеша, снимается в `finally`); 212 MiB на слой вместо 6.5 GiB; **бит-в-бит**
+  (проверено побайтным sha256 кадра);
+- `false` — кеша нет, префикс пересчитывается каждый шаг (~2× медленнее: 51 s против 24 s на 768p/3 рефа).
+
+Переопределение: `--set generation.kv_cache=offload|true|false`. Путь
+`generation.sampler_kwargs.kv_cache` — **удалён** (он не может жить в `sampler_kwargs`: ключ ставит
+`presets/base.yaml`, а ключи `sampler_kwargs` валидируются по спекам бекенда, и наследующий `base`
+`h3-image`/`flux2` падал бы на неизвестном ключе). Ключ эмбеддингов от `kv_cache` не зависит.
+Полный замер и выводы: `docs/bench/kv-cache-offload.md`.
 
 **Диск-стриминг текст-энкодера (`--set encoder.stream=true`).** Модель собирается на meta-параметрах
 (`accelerate.init_empty_weights(include_buffers=False)`, буферы вроде `rotary_emb.inv_freq` живые) и
