@@ -1,0 +1,50 @@
+[build-system]
+# >=77 нужен для SPDX-строки в `project.license` (PEP 639), без неё setuptools сыплет
+# BuildBackendWarning на каждый pip install.
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qwenstyle"
+version = "0.1.0"
+description = "Local NSFW anime style-transfer and generation on Qwen-Image-2.1 + FUSAL (8/16 GB VRAM)"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+keywords = ["text-to-image", "img2img", "qwen-image", "lora", "anime", "nsfw", "diffusers"]
+classifiers = [
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Graphics",
+  "Environment :: GPU :: NVIDIA CUDA",
+]
+dependencies = [
+  # torch/torchvision ставит bootstrap с CUDA-индексом (download.pytorch.org/whl/cu129):
+  # обычный pip на Windows отдаёт CPU-сборку, на которой пайплайн не запускается.
+  "torch>=2.8",
+  "torchvision>=0.23",
+  "diffusers>=0.43.0.dev0",
+  "transformers>=5.17",
+  "accelerate>=1.0",
+  "safetensors[numpy]>=0.6",
+  "peft>=0.13",
+  "huggingface_hub>=0.30",
+  "pillow>=10",
+  "numpy>=2.0",
+  "psutil>=6",
+]
+
+[project.scripts]
+qwenstyle = "qwenstyle.cli:main"
+
+# Список пакетов задан явно: find_packages() захватил бы cache/, hf-cache/, out/ и прочие
+# рабочие каталоги, которых в публикации нет. Веса и данные в пакет не входят — только код
+# и YAML-пресеты (загружаются models download --profile по лицензиям их репозиториев).
+# `qwenstyle.presets` — каталог только с данными (namespace-пакет): без него setuptools
+# предупреждает, что импортируемый каталог не объявлен, и данные рискуют не попасть в wheel.
+[tool.setuptools]
+packages = ["qwenstyle", "qwenstyle.backends", "qwenstyle.cmd", "qwenstyle.presets"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+qwenstyle = ["presets/*.yaml"]
