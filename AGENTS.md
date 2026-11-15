@@ -452,22 +452,19 @@ python -m qwenstyle bench encoder --repo <repo> --subfolder text_encoder --token
 | RAM → VRAM, pinned | **26.70** | H2D не предел: 15.26 GiB = ~0.6 s |
 | RAM → VRAM, pageable | **20.50** | выигрыш pinned = **1.30×** — на этом профиле pin покупает RAM (≈2.4 GiB `peak_uss`), а не время |
 
-**Pinned staging и group-offload — конфликт (решён в коде).** На Windows pinned-память CUDA — это
-блокировка страниц **и** маппинг в адресное пространство GPU (WDDM), то есть тот же ресурс, что и
-VRAM. Групповой offload держит в pinned-памяти 6.6–8.5 GiB весов fp8-трансформера, после чего
-первый же крупный staging-буфер энкодера падал прежде, чем начинался forward:
+**Pinned staging и `offload=group`.** Конфликт был: на Windows pinned-память CUDA — это блокировка
+страниц **и** маппинг в адресное пространство GPU (WDDM), то есть тот же ресурс, что и VRAM, поэтому
+крупный staging-буфер энкодера падал `CUDA error: out of memory`, пока групповой offload держал в
+pinned 6.6–8.5 GiB весов fp8-трансформера. Сейчас он **снят** переработкой работы с памятью (пиннинг
+уживается с group-offload; чтение весов — позиционный `seek+readinto`, §4 ниже):
 
-```
-[4/5] кодирование промта на GPU (Qwen3VL-8B, стриминг)...
-torch.AcceleratorError: CUDA error: out of memory   # streaming.py: torch.empty(..., pin_memory=True)
-# повторный запуск, без ручных флагов:  [done] … 974x1440, total 76s
-```
+- `pin_memory` включён по умолчанию **и при `offload=group`** — `RunConfig.encoder_pin_memory` читает
+  только поле `encoder.pin_memory`; выключить можно исключительно явно (`--set encoder.pin_memory=0`);
+- если pinned-аллокация всё же не удалась, `_PinnedPool` деградирует до pageable RAM, печатает причину
+  (`[stream] pinned-буфер … не выделился …`) и продолжает; результат **бит-в-бит** (pin — транспорт,
+  не математика, ключ кэша эмбеддингов от него не зависит).
 
-Поэтому `RunConfig.encoder_pin_memory` выключает pin **принудительно** при `generation.offload=group`
-(`--set encoder.pin_memory=1` его не включает), а `_PinnedPool` дополнительно деградирует, если
-pinned-буфер всё же не выделился. Цена: H2D 20.5 вместо 26.7 GB/s, то есть 0.05–0.31 s из 8–10 s
-энкода (§4 ниже) — замена упавшему прогону. Замер после правки: `full-qwen` 1088p с нуля,
-без `--set`: энкод 16.33 GiB стримится с `pin_memory=0`, полный прогон **76 s**.
+Выигрыш pin и так невелик: H2D 26.7 против 20.5 GB/s, то есть 0.05–0.31 s из 8–10 s энкода (§4 ниже).
 
 Прогоны (`bench encoder --stream 1`, forward = стена, в скобках — `compute` из `[stream]`):
 
