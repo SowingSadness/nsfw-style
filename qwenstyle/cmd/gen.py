@@ -130,8 +130,24 @@ def preset_hint() -> str:
 # --------------------------------------------------------------------------- #
 
 def prompt_dir(name: str) -> Path:
-    """`promts/<имя>` — папка промта (пользовательская, в `.gitignore`)."""
-    return Path(PROMPT_ROOT) / str(name)
+    """`promts/<имя>` — папка промта (пользовательская, в `.gitignore`).
+
+    Имя обязано остаться внутри `promts/`: `..`, абсолютные пути и всё, что после `resolve()`
+    выходит из корня, отклоняется (`ConfigError`), иначе `--prompt ../../etc` читал бы промт
+    и писал сессию вне проекта.
+    """
+    raw = str(name or "").strip()
+    root = Path(PROMPT_ROOT)
+    inside = False
+    if raw and not Path(raw).is_absolute() and ".." not in Path(raw).parts:
+        try:
+            inside = (root / raw).resolve().is_relative_to(root.resolve())
+        except (OSError, ValueError):             # нерезолвимый путь — считаем выходом из promts/
+            inside = False
+    if not inside:
+        raise ConfigError(f"имя папки промта должно быть внутри {PROMPT_ROOT}/ "
+                          f"(без .. и абсолютных путей)")
+    return root / raw
 
 
 def _natural_key(path: Path) -> tuple:
@@ -482,7 +498,11 @@ def run(args: argparse.Namespace) -> int:
         print(f"[gen] укажите --prompt: имя папки в {PROMPT_ROOT}/ "
               f"({PROMPT_ROOT}/<имя>/{PROMPT_FILE} + image*)", file=sys.stderr, flush=True)
         return 2
-    folder = prompt_dir(prompt_name)
+    try:
+        folder = prompt_dir(prompt_name)
+    except ConfigError as exc:                       # `..`/абсолютный путь: выход из promts/
+        print(f"[gen] {exc}", file=sys.stderr, flush=True)
+        return 2
     prompt_file = folder / PROMPT_FILE
     if not prompt_file.is_file():
         print(f"[gen] нет {posix(prompt_file)} — положите текст промта в этот файл",

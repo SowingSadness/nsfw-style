@@ -24,9 +24,11 @@ usage() {
     cat <<'EOF'
 qwenstyle bootstrap - one command to a working install (Linux / macOS)
 
-usage: ./bootstrap.sh [--profile weak|strong|flagship] [--dry-run] [--check]
-                      [--skip-models] [--no-venv]
+usage: ./bootstrap.sh [weak|strong|flagship] [--profile weak|strong|flagship]
+                      [--dry-run] [--check] [--skip-models] [--no-venv]
 
+  weak|strong|flagship  machine profile as the first positional argument
+                        (same as --profile NAME)
   --profile NAME  machine profile: weak (8 GB VRAM), strong (16 GB, default),
                   flagship (16 GB VRAM + 64 GB RAM)
   --dry-run       print every step and the model plan; install and download nothing
@@ -38,6 +40,8 @@ EOF
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        weak|strong|flagship)
+            PROFILE="$1"; shift ;;
         --profile)
             if [ $# -lt 2 ]; then usage >&2; exit 2; fi
             PROFILE="$2"; shift 2 ;;

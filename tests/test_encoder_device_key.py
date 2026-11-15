@@ -42,7 +42,8 @@ if str(REPO_ROOT) not in sys.path:
 
 #: Пресет `base` с закреплённым штатным энкодером: с D7 дефолтом в `presets/base.yaml` стал
 #: heretic, а этот тест проверяет именно матрицу тегов (`base` -> без сегмента, `heretic` ->
-#: `_te-heretic`), поэтому энкодер фиксируется явно — как это делает `check-parity`.
+#: `_te-heretic`), поэтому энкодер фиксируется явно — так же, как это делают `selftest`
+#: и остальные проверки пакета.
 def _profile_base(**overrides):
     pinned = {"encoder.name": "base"}
     pinned.update(overrides)
