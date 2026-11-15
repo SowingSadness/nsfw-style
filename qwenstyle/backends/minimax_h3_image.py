@@ -83,7 +83,7 @@ from typing import Any, ClassVar
 
 from ..config import ConfigError
 from ..registry import RegistryError, get_encoder, register_generation
-from .base import GIB, REPO_ROOT, Capabilities, ResourceBudget
+from .base import GIB, REPO_ROOT, Capabilities, ResourceBudget, as_image_list
 
 #: Репозиторий пайплайна: `transformer_diffusers/`, `vae_diffusers/`, `pdd_*`, `processor/`,
 #: `tokenizer/`, `scheduler/`, `model_index.json`. Веса уже установлены в `hf-cache`.
@@ -398,7 +398,7 @@ def _is_encode_child() -> bool:
 def _encode_child_main(job_path: str) -> int:
     """Точка входа дочернего процесса фазы `[3/4]`: `prepare(need_encoder=True)` + `encode`.
 
-    Задание — pickle-файл `{cfg, prompt, image, out}` (см. `_encode_in_child`): `RunConfig`
+    Задание — pickle-файл `{cfg, prompt, images, out}` (см. `_encode_in_child`): `RunConfig`
     забирает с собой пресет, значит дочерний процесс собирает **тот же** энкодер (та же
     ревизия/локальный каталог/dtype/stream/prefetch), что и родитель, и пишет результат
     в `out` тем же форматом, который ждёт `pipeline._conditioning`.
@@ -410,15 +410,16 @@ def _encode_child_main(job_path: str) -> int:
         cfg = _sync_encoder_cfg(cfg)
         print("    [3/4] запасной режим: синхронный стриминг энкодера (prefetch=0, без pinned)",
               flush=True)
-    image = None
-    if job.get("image"):
+    images: list[Any] = []
+    paths = job.get("images") or ([job["image"]] if job.get("image") else [])
+    if paths:
         from PIL import Image
 
-        image = Image.open(job["image"])           # как `pipeline._plan`: без convert()
+        images = [Image.open(path) for path in paths]   # как `pipeline._plan`: без convert()
     backend = MiniMaxH3ImageBackend()
     handle = backend.prepare(cfg, need_encoder=True)
     try:
-        payload = backend.encode(cfg, handle, image, str(job["prompt"]))
+        payload = backend.encode(cfg, handle, images, str(job["prompt"]))
     finally:
         backend.release(handle)
     _torch().save(payload, job["out"])
@@ -632,7 +633,8 @@ class MiniMaxH3ImageBackend:
     cache_stage: ClassVar[str] = "text_embeds"
     caps: ClassVar[Capabilities] = Capabilities(
         conditioning="internal",          # packed-последовательность: текст + референсы + кадр
-        image_inputs="multi",             # референсов может быть несколько (`edit`)
+        image_inputs="multi",             # референсов несколько: по латенту на каждый (edit)
+        max_images=10,                    # как у Qwen-Image-2.1: больше 10 блоки не рассчитаны
         requires_image=False,             # T2I разрешён: image-блоки пайплайн пропускает сам
         encoder="required",               # Qwen3-VL-32B (hidden 5120); без него новый промт не закодить
         fixed_steps=DEFAULT_STEPS,        # pdd_config.json: 6 шагов, сигмы фиксированы
@@ -794,11 +796,14 @@ class MiniMaxH3ImageBackend:
                prompt: str) -> dict[str, Any]:
         """Промт (+ референсы) -> `prompt_embeds` (hidden 5120) и `text_token_tags`.
 
+        `image` — список референсов (одиночная `PIL.Image` тоже принимается, `base.as_image_list`);
+        блоки `image_conditioned` формируют метку `Picture i: ` и vision-блок для **каждого**
+        референса и считают по латенту на каждый — многореференсный режим есть в самом пайплайне,
+        поэтому кодируем именно блоками пайплайна, а не своей склейкой.
+
         Формат `.pt`-кэша — R1: ключевые тензоры лежат под теми же именами, что и у других
         бекендов (`prompt_embeds` есть в `pipeline._SHAPE_KEYS`), плюс `prompt` дописывает
-        оркестратор. Режим (t2i/edit) выбирают сами блоки по наличию `image`: в edit перед промтом
-        добавляются метка `Picture i: ` и vision-блок референса — на этом же conditioning обучен
-        трансформер, поэтому кодируем именно блоками пайплайна, а не своей склейкой.
+        оркестратор. Режим (t2i/edit) выбирают сами блоки по наличию `image`.
 
         **Где считается.** Если `prepare` собрал энкодер в этом процессе (так делает только
         дочерний процесс фазы, `_is_encode_child`) — считаем здесь; иначе (родитель) запускаем
@@ -806,16 +811,17 @@ class MiniMaxH3ImageBackend:
         шардов, а следующий шаг — fp8-трансформер с его ~65 GiB; одновременно они не влезают
         (commit-limit 115–125 GiB, см. docstring модуля).
         """
+        images = as_image_list(image)
         if handle.encode_pipe is None or handle.text_encoder is None:
-            return self._encode_in_child(cfg, image, prompt)
+            return self._encode_in_child(cfg, images, prompt)
         torch = _torch()
-        images = [image] if image is not None else None
-        mode = "edit: референс + промт" if image is not None else "t2i: промт"
+        mode = (f"edit: {len(images)} референсов + промт" if len(images) > 1
+                else ("edit: референс + промт" if images else "t2i: промт"))
         print(f"[3/4] текстовые эмбеддинги Qwen3-VL-32B (hidden 5120, hidden_states[50], {mode})",
               flush=True)
         started = time.time()
         try:
-            out = handle.encode_pipe(prompt=prompt, image=images,
+            out = handle.encode_pipe(prompt=prompt, image=images or None,
                                      output=["prompt_embeds", "text_token_tags"])
         finally:
             # VRAM/RAM нужны трансформеру: стриминговый энкодер больше не пригодится
@@ -829,8 +835,12 @@ class MiniMaxH3ImageBackend:
               f"text_token_tags {tuple(tags.shape)}", flush=True)
         return {"prompt_embeds": embeds, "text_token_tags": tags}
 
-    def _encode_in_child(self, cfg: Any, image: Any, prompt: str) -> dict[str, Any]:
+    def _encode_in_child(self, cfg: Any, images: Any, prompt: str) -> dict[str, Any]:
         """Фаза `[3/4]` отдельным процессом: `_encode_child_main` -> `.pt` -> тензоры.
+
+        `images` — список референсов (пустой = T2I). Все сохраняются в рабочий каталог задачи
+        без потерь (`PNG`), потому что дочерний процесс получает только пути: PIL-объект через
+        pickle не передаётся.
 
         Зачем процесс, а не «просто аккуратнее жить с памятью»: commit-charge Windows на этой
         машине — общий ресурс (RAM 63.6 GiB + pagefile ~55 GiB), и mmap шардов энкодера
@@ -844,13 +854,13 @@ class MiniMaxH3ImageBackend:
         work = Path(tempfile.mkdtemp(prefix="qwenstyle-h3i-encode-"))
         job_path = work / "job.pickle"
         out_path = work / "embeds.pt"
-        job: dict[str, Any] = {"cfg": cfg, "prompt": str(prompt), "image": None,
+        job: dict[str, Any] = {"cfg": cfg, "prompt": str(prompt), "images": [],
                               "out": str(out_path)}
         try:
-            if image is not None:
-                image_path = work / "image.png"
-                image.save(image_path, format="PNG")    # без потерь: те же пиксели, что у plan.image
-                job["image"] = str(image_path)
+            for index, item in enumerate(as_image_list(images), start=1):
+                image_path = work / f"image{index}.png"
+                item.save(image_path, format="PNG")   # без потерь: те же пиксели, что у plan.images
+                job["images"].append(str(image_path))
             job_path.write_bytes(pickle.dumps(job))
             env = dict(os.environ)
             env[ENCODE_CHILD_ENV] = "1"
@@ -929,15 +939,18 @@ class MiniMaxH3ImageBackend:
 
     def generate(self, cfg: Any, handle: MiniMaxH3ImageHandle, cond: Any, image: Any,
                  seed: int) -> Any:
-        """6 шагов PDD (`pdd_step_index` внутри пайплайна) -> PIL-кадр; референс опционален.
+        """6 шагов PDD (`pdd_step_index` внутри пайплайна) -> PIL-кадр; референсы опциональны.
 
-        `image=None` -> блоки `text2image` (T2I без `--input`); список -> `image_conditioned`.
+        `image` — список референсов (одиночная `PIL.Image` тоже принимается): пустой -> блоки
+        `text2image` (T2I без `--input`), непустой -> `image_conditioned` (по латенту на каждый
+        референс, размер канвы — по первому).
         Размер канвы берётся из `crop` плана и округляется вверх до `canvas_multiple` (32) —
         этого требует `PrepareLayoutStep`, а `RunConfig.crop` гарантирует только кратность 16.
         """
         torch = _torch()
         pipe = self._ensure_pipeline(cfg, handle)
-        width, height = _frame_size(cfg, image)
+        refs = as_image_list(image)
+        width, height = _frame_size(cfg, refs[0] if refs else None)
         multiple = int(pipe.canvas_multiple)
         snapped_w = max(multiple, int(round(width / multiple)) * multiple)
         snapped_h = max(multiple, int(round(height / multiple)) * multiple)
@@ -954,14 +967,14 @@ class MiniMaxH3ImageBackend:
         tags = cond["text_token_tags"].to("cpu", torch.long)
         area = _sampler_int(cfg, "min_generation_area", DEFAULT_MIN_GENERATION_AREA)
         generator = torch.Generator(device=str(device)).manual_seed(int(seed))
-        mode = "edit" if image is not None else "t2i"
+        mode = "edit" if refs else "t2i"
         print(f"[4/4] генерация: {handle.steps} шагов @ {width}x{height} ({mode}), "
               f"min_generation_area={area}, seed={int(seed)}", flush=True)
         started = time.time()
         images = pipe(
             prompt_embeds=embeds,
             text_token_tags=tags,
-            image=[image] if image is not None else None,
+            image=refs or None,
             height=int(height),
             width=int(width),
             min_generation_area=int(area),

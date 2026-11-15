@@ -57,6 +57,11 @@ class Capabilities:
 
     conditioning: ConditioningMode
     image_inputs: ImageInputs = "single"
+    #: Сколько референсов модель принимает в **одном** запросе (`None` = без явного предела).
+    #: Ядро читает поле в `pipeline._plan`: лишние картинки отбрасываются с одной строкой в логе
+    #: («взяты image1..image10»), а не роняют прогон. У Qwen-Image-2.1 предел 10 (в промте модели
+    #: плейсхолдеры `<image1>`…`<image10>`), у FLUX.2/MiniMax-H3 предел не объявлен.
+    max_images: int | None = None
     #: Обязателен ли референс на входе. `True` (умолчание) — генерация без `--input` падает
     #: preflight'ом `pipeline.input_problem()` до загрузки весов; `False` — чистое T2I
     #: (H3-Image: image-блоки пайплайна просто не запускаются). `image_inputs` этого не заменяет:
@@ -78,6 +83,7 @@ class Capabilities:
         parts = [
             f"conditioning={self.conditioning}",
             f"image_inputs={self.image_inputs}",
+            f"max_images={_fmt_steps(self.max_images)}",
             f"encoder={self.encoder}",
             f"fixed_steps={_fmt_steps(self.fixed_steps)}",
             f"precision={'|'.join(self.precision) or '-'}",
@@ -134,19 +140,43 @@ class GenerationBackend(Protocol):
     def prepare(self, cfg: "RunConfig", need_encoder: bool) -> Any:
         """Загружает всё нужное (пайплайн/трансформер/энкодер) и возвращает handle."""
 
-    def encode(self, cfg: "RunConfig", handle: Any, image: "Image.Image | None",
+    def encode(self, cfg: "RunConfig", handle: Any, images: "list[Image.Image] | None",
                prompt: str) -> Any:
-        """Conditioning: эмбеддинги промта/картинки (или их отсутствие при `internal`)."""
+        """Conditioning: эмбеддинги промта и **всех** референсов (или `None` при `internal`/T2I).
+
+        `images` — список картинок входа (пустой/T2I — `None` или `[]`); список длины 1 — обычный
+        режим img2img, и бекенд обязан обрабатывать его так же, как раньше одиночную картинку.
+        Больше `Capabilities.max_images` сюда не придёт: лишнее отбрасывает `pipeline._plan`.
+        """
 
     def generate(self, cfg: "RunConfig", handle: Any, cond: Any,
-                 image: "Image.Image | None", seed: int) -> "Image.Image":
-        """Сэмплирование: тот же seed и параметры обязаны давать побайтово тот же кадр."""
+                 images: "list[Image.Image] | None", seed: int) -> "Image.Image":
+        """Сэмплирование: тот же seed и параметры обязаны давать побайтово тот же кадр.
+
+        `images` — тот же список референсов, что у `encode` (список длины 1 — обычный режим;
+        `None`/`[]` — text-to-image). Одиночная `PIL.Image` тоже принимается: так бекенд зовут
+        `bench`/одноразовые проверки, и это не должно требовать от них знать про список.
+        """
 
     def release(self, handle: Any) -> None:
         """Освобождает VRAM/RAM перед апскейлом (`del` + `gc` + `empty_cache`)."""
 
     def probe(self, cfg: "RunConfig") -> dict[str, Any]:
         """Диагностика без генерации: версии, размер весов, состояние fp8-кэша."""
+
+
+def as_image_list(value: Any) -> list[Any]:
+    """`PIL | list[PIL] | tuple[PIL] | None` -> список референсов (пустой для `None`).
+
+    Единственное место, где бекенд приводит вход к списку: ядро передаёт `list` (даже для одного
+    кадра), но `bench`/тесты/старые обёртки зовут `encode`/`generate` одиночной картинкой, и это
+    должно оставаться рабочим. `None`-элементы отбрасываются (T2I-ветка H3).
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [item for item in value if item is not None]
+    return [value]
 
 
 class UpscaleBackend(Protocol):
@@ -292,6 +322,6 @@ def hardware_budget_verdict(budget: ResourceBudget, resources: Hardware | None =
 
 __all__ = [
     "Capabilities", "ConditioningMode", "EncoderBackend", "EncoderRole", "GIB", "GenerationBackend",
-    "Hardware", "ImageInputs", "REPO_ROOT", "ResourceBudget", "UpscaleBackend",
+    "Hardware", "ImageInputs", "REPO_ROOT", "ResourceBudget", "UpscaleBackend", "as_image_list",
     "hardware_budget_verdict", "hardware_resources",
 ]

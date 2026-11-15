@@ -37,7 +37,7 @@ from typing import Any, ClassVar
 
 from ..config import encoder_device_canon
 from ..registry import register_generation
-from .base import REPO_ROOT, Capabilities, ResourceBudget
+from .base import REPO_ROOT, Capabilities, ResourceBudget, as_image_list
 
 #: Репозиторий пайплайна (text-encoder + VAE + processor + transformer).
 DEFAULT_REPO = "Qwen/Qwen-Image-2.1"
@@ -389,7 +389,10 @@ class QwenImage21Backend:
     name: ClassVar[str] = "qwen_image21"
     caps: ClassVar[Capabilities] = Capabilities(
         conditioning="precomputed",
-        image_inputs="single",
+        # до 10 референсов в одном запросе: шаблон промта подставляет <image1>…<imageN>,
+        # а vision-токены считаются по всем картинкам сразу (`encode_prompt(image=[...])`)
+        image_inputs="multi",
+        max_images=10,
         encoder="optional",
         fixed_steps=None,                 # turbo 8 шагов известно только после чтения sigmas
         supports_lora=True,
@@ -627,8 +630,37 @@ class QwenImage21Backend:
             handle.resolution = int(cfg.effective_resolution(*image.size))
         return handle.input_image
 
+    def resize_inputs(self, cfg: Any, handle: QwenImage21Handle, images: list[Any]) -> list[Any]:
+        """Входные кадры, приведённые к сетке conditioning (`image_processor.resize`).
+
+        Сетка считается по **первой** картинке (как `RunConfig.crop`), остальные референсы
+        приводятся к тому же WxH: `encode_prompt` и `encode_prompt`-замыкание в `generate`
+        обязаны видеть одни и те же тензоры, иначе картинка поедет относительно одиночного пути.
+
+        Одиночный путь кэшируется в `handle` (`input_image`/`crop`/`resolution`): `encode` и
+        `generate` вызываются по разу на кадр, а повторный resize — лишняя работа и лишний тензор.
+        При нескольких референсах список пересчитывается каждый раз (кэш держит только первый,
+        его же видит старый код через `handle.input_image`).
+        """
+        first = images[0]
+        crop = tuple(int(v) for v in cfg.crop(*first.size))
+        if len(images) == 1:
+            return [self.resize_input(cfg, handle, first)]
+        resized = [handle.pipe.image_processor.resize(image, width=crop[0], height=crop[1])
+                   for image in images]
+        handle.input_image = resized[0]
+        handle.crop = crop
+        handle.resolution = int(cfg.effective_resolution(*first.size))
+        return resized
+
     def encode(self, cfg: Any, handle: QwenImage21Handle, image: Any, prompt: str) -> dict[str, Any]:
-        """Эмбеддинги промта и картинки (`encode_prompt`) на устройстве энкодера, формат `.pt`-кэша.
+        """Эмбеддинги промта и **всех** референсов (`encode_prompt`) на устройстве энкодера.
+
+        `image` — список картинок входа (одиночная `PIL.Image` тоже принимается, `base.as_image_list`).
+        Vision-токены считаются по всем: `QwenImage21Pipeline._get_qwen_prompt_embeds` строит
+        плейсхолдеры `<image1>`…`<imageN>` ровно по числу переданных картинок и отдаёт processor'у
+        весь набор, а `image_pad_mask` отмечает все vision-позиции — то есть conditioning обучен
+        на многореференсном режиме, а не склеен вручную.
 
         Устройство берётся из `handle` (разрешённое `encoder.device`): по умолчанию на машине
         с CUDA это `cuda` — стриминговые веса Qwen3VL-8B идут через VRAM (~15–25 s) вместо CPU
@@ -638,22 +670,25 @@ class QwenImage21Backend:
         про кэш знает он, а не бекенд.
         """
         torch = _torch()
-        if image is None:
+        images = as_image_list(image)
+        if not images:
             raise ValueError("qwen_image21: нужен входной кадр (conditioning=img2img)")
 
-        input_image = self.resize_input(cfg, handle, image)
+        input_images = self.resize_inputs(cfg, handle, images)
         device = torch.device(handle.encoder_device or "cpu")
         on_gpu = device.type == "cuda"
         if on_gpu:
             print("[4/5] кодирование промта на GPU (Qwen3VL-8B, стриминг)...", flush=True)
         else:
             print("[4/5] кодирование промта на CPU (Qwen3VL-8B, ~1-3 мин)...", flush=True)
+        if len(input_images) > 1:
+            print(f"    референсов: {len(input_images)} (vision-токены по всем)", flush=True)
         started = time.time()
         try:
             with torch.no_grad():
                 prompt_embeds, prompt_embeds_mask, image_pad_mask = handle.pipe.encode_prompt(
                     prompt=prompt,
-                    image=[input_image],
+                    image=input_images,
                     device=device,
                 )
         finally:
@@ -698,18 +733,25 @@ class QwenImage21Backend:
         """Денойзинг с готовыми эмбеддингами. Порядок важен: перенос на GPU -> подмена
         `encode_prompt` -> `pipe(...)`: `__call__` не принимает `image_pad_mask`, а с `image` +
         `prompt_embeds` падает, поэтому эмбеддинги отдаются через замыкание.
+
+        `image` — список референсов (одиночная `PIL.Image` тоже принимается). В `pipe(...)` он
+        уходит списком только при >1: `__call__` для одной картинки ведёт себя как раньше, а для
+        списка считает латенты по каждому референсу (`prepare_latents(vae_images)`) и склеивает
+        их перед латентами кадра.
         """
         torch = _torch()
-        if image is not None:
-            input_image = self.resize_input(cfg, handle, image)
+        images = as_image_list(image)
+        if images:
+            input_images = self.resize_inputs(cfg, handle, images)
         elif handle.input_image is not None:
-            input_image = handle.input_image
+            input_images = [handle.input_image]
         else:
             raise ValueError("qwen_image21: нет входного кадра (conditioning=img2img)")
 
-        crop = handle.crop or tuple(int(v) for v in cfg.crop(*image.size))
+        first = images[0] if images else None
+        crop = handle.crop or tuple(int(v) for v in cfg.crop(*first.size))
         crop_w, crop_h = int(crop[0]), int(crop[1])
-        resolution = int(handle.resolution or cfg.effective_resolution(*image.size))
+        resolution = int(handle.resolution or cfg.effective_resolution(*first.size))
 
         prompt_embeds = cond["embeds"].to("cuda", dtype=torch.bfloat16)
         mask = cond.get("mask")
@@ -722,7 +764,8 @@ class QwenImage21Backend:
         handle.pipe.encode_prompt = cached_encode_prompt
 
         steps = int(handle.steps)
-        print(f"[5/5] генерация: {steps} шагов @ res {resolution}"
+        refs = f", референсов {len(input_images)}" if len(input_images) > 1 else ""
+        print(f"[5/5] генерация: {steps} шагов @ res {resolution}{refs}"
               f"{' (preview)' if cfg.is_preview else ''}", flush=True)
         started = time.time()
         with torch.inference_mode():
@@ -730,7 +773,7 @@ class QwenImage21Backend:
                 prompt=None,
                 prompt_embeds=prompt_embeds,
                 prompt_embeds_mask=prompt_embeds_mask,
-                image=input_image,
+                image=input_images[0] if len(input_images) == 1 else input_images,
                 height=crop_h,
                 width=crop_w,
                 num_inference_steps=steps,

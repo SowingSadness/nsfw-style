@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -41,17 +42,51 @@ IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
 # Ключ входа
 # --------------------------------------------------------------------------- #
 
-def image_sha(image_path: str | Path) -> str:
-    """Первые 12 hex sha256 файла входа — как в run_style.py.
+def image_sha(image_path: str | Path | Sequence[str | Path]) -> str:
+    """Ключ входа: 12 hex sha256.
 
-    Пустой путь = прогон без референса (T2I, план `minimax-h3-image`): возвращается
-    sentinel `NOREF_SHA`, а не исключение. Сегмент попадает в имя `.pt`-кэша, поэтому
-    записи T2I и записи с конкретным кадром никогда не смешиваются.
+    Один путь — **историческое** поведение (`run_style.py`): sha256 файла, первые 12 hex
+    (`imgs/a.png` -> `9f2c…`). Пустой путь = прогон без референса (T2I, план `minimax-h3-image`):
+    возвращается sentinel `NOREF_SHA`, а не исключение.
+
+    Список/кортеж путей — составной ключ (`images_sha`): `sha256("|".join(полные sha256))[:12]`.
+    Список из одного элемента **обязан** совпадать с одиночным путём — иначе существующие записи
+    `cache/embeds/embeds_<md5>_<sha>_<W>x<H>.pt` перестали бы попадать в кэш (AGENTS.md R1),
+    поэтому в этом случае вызывается та же ветка одного файла.
+
+    Сегмент попадает в имя `.pt`-кэша, поэтому записи T2I, одиночного кадра и набора референсов
+    никогда не смешиваются.
     """
+    if isinstance(image_path, (list, tuple)):
+        return images_sha(image_path)
     text = str(image_path or "").strip()
     if not text:
         return NOREF_SHA
-    return hashlib.sha256(Path(text).read_bytes()).hexdigest()[:12]
+    return _file_sha256(text)[:12]
+
+
+def images_sha(paths: Sequence[str | Path] | str | Path | None) -> str:
+    """Составной ключ набора референсов: `sha256("|".join(full sha256 каждого файла))[:12]`.
+
+    Порядок значим: `--input a --input b` и `--input b --input a` — разные conditioning, как и
+    разные плейсхолдеры `<image1>`/`<image2>` в промте Qwen-Image-2.1. Пустой список/`None`/только
+    пустые строки -> `NOREF_SHA`. Один элемент -> `image_sha(путь)` (см. докстринг выше).
+    """
+    if paths is None or isinstance(paths, (str, Path)):
+        return image_sha(paths or "")
+    items = [str(item or "").strip() for item in paths]
+    items = [item for item in items if item]
+    if not items:
+        return NOREF_SHA
+    if len(items) == 1:
+        return image_sha(items[0])
+    joined = "|".join(_file_sha256(item) for item in items)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:12]
+
+
+def _file_sha256(path: str) -> str:
+    """Полный sha256 файла (hex): в составной ключ идёт целиком, в имя кэша — первые 12."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 # --------------------------------------------------------------------------- #
@@ -173,4 +208,4 @@ def save_atomic(image: "Image.Image", path: str | Path,
 
 
 __all__ = ["DEFAULT_SUFFIX", "IMAGE_SUFFIXES", "NOREF_SHA", "batch_paths", "factor_tag",
-           "image_sha", "log_dir", "out_path", "save_atomic", "seed_tag"]
+           "image_sha", "images_sha", "log_dir", "out_path", "save_atomic", "seed_tag"]

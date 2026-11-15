@@ -6,7 +6,8 @@
 
 Маппинг старых флагов `run_style.py` (значение -> путь в `RunConfig`):
 
-    --input PATH               -> input
+    --input PATH               -> inputs (кортеж; повтор флага = несколько референсов),
+                                  а input остаётся алиасом первого (inputs[0])
     --out PATH                 -> out                      (теги -x{factor} и -s{seed} добавит io)
     --lora-scale F             -> generation.lora.scale     (бесплатная ось: ключ кэша не меняет)
     --model base|turbo         -> пресет (base/turbo)       (turbo — только по явному флагу)
@@ -183,8 +184,8 @@ def build_config(args: argparse.Namespace) -> RunConfig:
     if preview:
         overrides["preview"] = True
 
-    if getattr(args, "input", None):
-        overrides["input"] = args.input
+    if getattr(args, "inputs", None):
+        overrides["inputs"] = tuple(args.inputs)
     if getattr(args, "out", None):
         overrides["out"] = args.out
     else:
@@ -267,7 +268,12 @@ def print_plan(cfg: RunConfig, info: dict[str, Any]) -> None:
     lora_text = f"{float(lora):g}" if lora is not None else "—"
     print(f"[plan] backend={info.get('backend')} preset={cfg.preset or '-'} seed={info.get('seed')} "
           f"size_px={info.get('size_px') or '-'} resolution={info.get('resolution')}", flush=True)
-    print(f"[plan] input {info.get('input')} ({info.get('in_size')}) -> crop {info.get('crop')}", flush=True)
+    inputs = info.get("inputs") or []
+    refs = f", {len(inputs)} референсов" if len(inputs) > 1 else ""
+    print(f"[plan] input {info.get('input')} ({info.get('in_size')}{refs}) -> crop {info.get('crop')}",
+          flush=True)
+    if len(inputs) > 1:                              # одиночный путь печатается как раньше
+        print(f"[plan] референсы ({len(inputs)}): {', '.join(inputs)}", flush=True)
     print(f"[plan] steps={info.get('steps')} precision={info.get('precision')} "
           f"offload={info.get('offload')} guidance={info.get('guidance')} lora={lora_text}", flush=True)
     print(f"[plan] cache key={info.get('embeds_key')} (stage={info.get('embeds_stage')}, "
@@ -313,9 +319,10 @@ def _check_files(args: argparse.Namespace) -> str | None:
     как собран `RunConfig`. Здесь остаются только «путь указан, а файла нет», иначе
     T2I-модели не смогли бы работать без `--input`.
     """
-    raw = getattr(args, "input", None)
-    if raw and not Path(raw).is_file():
-        return f"нет входного кадра {raw} (--input)"
+    raw = getattr(args, "inputs", None) or []
+    for path in ([raw] if isinstance(raw, str) else raw):
+        if path and not Path(path).is_file():
+            return f"нет входного кадра {path} (--input)"
     prompt_file = getattr(args, "prompt_file", None)
     if prompt_file and not Path(prompt_file).is_file():
         return f"нет файла промта {prompt_file} (--prompt-file)"
@@ -367,8 +374,10 @@ def _execute(args: argparse.Namespace, cfg: RunConfig, pipeline: Any) -> int:
 
 def add_args(parser: argparse.ArgumentParser) -> None:
     source = parser.add_argument_group("что и чем генерировать")
-    source.add_argument("--input", default=None, metavar="PATH",
+    source.add_argument("--input", dest="inputs", action="append", default=None, metavar="PATH",
                         help="входной кадр (референс: он же conditioning и ключ кэша эмбеддингов); "
+                             "можно повторить для нескольких референсов (--input a --input b; "
+                             "сколько принимает модель — см. `models list`/`Capabilities.max_images`); "
                              "не обязателен для моделей с Capabilities.requires_image=False — "
                              "там без него работает T2I, а пропорцию кадра задаёт --aspect")
     source.add_argument("--out", default=None, metavar="PATH",

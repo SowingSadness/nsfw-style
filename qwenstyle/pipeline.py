@@ -39,11 +39,10 @@ from .config import (
     RunConfig,
     encoder_device_canon,
     encoder_dtype_canon,
-    image_sha,
     load_prompt,
     prompt_md5,
 )
-from .io import batch_paths, log_dir, out_path, save_atomic
+from .io import batch_paths, images_sha, log_dir, out_path, save_atomic
 from .registry import RegistryError, get_encoder, get_generation, get_upscale
 from .runlog import batch_log_dir
 
@@ -77,7 +76,12 @@ class Result:
 class Plan:
     """Всё, что можно посчитать без моделей: вход, сетка, ключ кэша, апскейл и имя файла."""
 
-    image: Any | None                            # PIL.Image входа (RGBA) или None без референса
+@dataclass(frozen=True)
+class Plan:
+    """Всё, что можно посчитать без моделей: вход, сетка, ключ кэша, апскейл и имя файла."""
+
+    #: Все референсы входа (PIL.Image RGBA, порядок значим); пустой список = T2I (`--aspect`).
+    images: list[Any]
     in_size: tuple[int, int]
     crop: tuple[int, int]                        # conditioning-сетка (WxH)
     resolution: int                              # sqrt(площадь crop), как `--resolution`
@@ -91,6 +95,15 @@ class Plan:
     need_encoder: bool                           # промах кэша на бекенде, которому нужен энкодер
     factor: float                                # множитель апскейла (0 = выключен/не нужен)
     out_path: str
+
+    @property
+    def image(self) -> Any | None:
+        """Первый референс (прежнее поле `Plan.image`): `None` при T2I.
+
+        Оставлено свойством, чтобы старые вызовы (`plan.image`) работали без правок: сетка
+        conditioning и пропорция кадра всегда считаются по **первой** картинке (`RunConfig.crop`).
+        """
+        return self.images[0] if self.images else None
 
 
 # --------------------------------------------------------------------------- #
@@ -385,8 +398,9 @@ def input_problem(cfg: RunConfig, caps: Any) -> str | None:
             return ("без --input нужен --aspect (16:9|4:3|1:1), иначе не из чего взять "
                     "пропорцию кадра")
         return None
-    if not Path(cfg.input).is_file():
-        return f"нет входного кадра {cfg.input} (--input)"
+    for path in (cfg.inputs or (cfg.input,)):      # все референсы, не только первый
+        if not Path(str(path)).is_file():
+            return f"нет входного кадра {path} (--input)"
     return None
 
 
@@ -396,9 +410,15 @@ def _plan(cfg: RunConfig, backend_cls: type, *, verbose: bool = False) -> Plan:
     Ничего не грузит: ни модели, ни энкодер. Именно поэтому `dry_run()` отвечает на вопрос
     «сколько это будет стоить» (энкод 55–255 с или только шаги сэмплера) без единого тензора.
 
-    Без `--input` (T2I) картинки нет (`image = None`, `in_size = (0, 0)`, `img_sha = "noref"`),
+    Без `--input` (T2I) картинок нет (`images = []`, `in_size = (0, 0)`, `img_sha = "noref"`),
     а пропорция кадра берётся из `--aspect` (`RunConfig.frame_ratio`); нужен ли референс вовсе,
     решает `input_problem()` по `Capabilities`.
+
+    **Несколько референсов** (`--input a --input b`): открываются все, но сетка `crop` и `in_size`
+    считаются по **первой** картинке (так же и `fit_cover` при `--aspect`), а ключ кэша берётся
+    составной (`io.images_sha`) — одиночный путь даёт прежний хеш. Если картинок больше, чем
+    `Capabilities.max_images`, лишние отбрасываются здесь (единственное место, знающее caps)
+    с одной строкой в логе — прогон не падает.
     """
     caps = getattr(backend_cls, "caps", None)
     problem = input_problem(cfg, caps)
@@ -408,8 +428,16 @@ def _plan(cfg: RunConfig, backend_cls: type, *, verbose: bool = False) -> Plan:
     from PIL import Image
 
     prompt = load_prompt(cfg)
-    has_input = bool(str(cfg.input or "").strip())   # тот же критерий, что в `input_problem`
-    image = Image.open(cfg.input).convert("RGBA") if has_input else None
+    paths = [str(p) for p in (cfg.inputs or ((cfg.input,) if cfg.input else ()))]
+    limit = getattr(caps, "max_images", None)
+    if limit and len(paths) > int(limit):
+        total, keep = len(paths), int(limit)
+        name = str(getattr(backend_cls, "name", "") or cfg.generation.backend)
+        print(f"[in] картинок {total}, бекенд {name} поддерживает {keep} — "
+              f"взяты image1..image{keep} (image{keep + 1}..image{total} отброшены)", flush=True)
+        paths = paths[:keep]
+    images = [Image.open(path).convert("RGBA") for path in paths]
+    image = images[0] if images else None
     in_w, in_h = image.size if image is not None else (0, 0)
     resolution = int(cfg.effective_resolution(in_w, in_h))
     if verbose and cfg.size_px:
@@ -420,12 +448,15 @@ def _plan(cfg: RunConfig, backend_cls: type, *, verbose: bool = False) -> Plan:
     if cfg.aspect and image is not None:
         # пропорция кадра задана вручную: референс подгоняем без искажений (scale-to-cover),
         # иначе resize в бекенде сплющил бы картинку под чужую пропорцию.
-        image = fit_cover(image, crop[0], crop[1])
+        images = [fit_cover(item, crop[0], crop[1]) for item in images]
+        image = images[0]
     md5 = prompt_md5(prompt)
-    sha = image_sha(cfg.input)
+    sha = images_sha(paths)
 
     if verbose:
         source = f"{in_w}x{in_h}" if image is not None else "нет референса"
+        if len(images) > 1:                 # одиночный путь печатает историческую строку 1:1
+            source += f" ({len(images)} референсов)"
         print(f"[in] {source} -> conditioning {crop[0]}x{crop[1]} | prompt {md5} | image {sha}",
               flush=True)
 
@@ -454,7 +485,7 @@ def _plan(cfg: RunConfig, backend_cls: type, *, verbose: bool = False) -> Plan:
     # см. `upscale_effective_factor`). На решение о вызове бекенда это тоже влияет: `run()`
     # вызывает `_postprocess` только при `factor > 0`.
     factor = upscale_effective_factor(cfg, crop)
-    return Plan(image=image, in_size=(in_w, in_h), crop=crop, resolution=resolution,
+    return Plan(images=images, in_size=(in_w, in_h), crop=crop, resolution=resolution,
                 prompt=prompt, prompt_md5=md5, img_sha=sha, blob=blob, cache_path=path,
                 cached=cached, cache_meta=meta, need_encoder=need_encoder, factor=factor,
                 out_path=out_path(cfg, factor))
@@ -507,7 +538,7 @@ def _conditioning(cfg: RunConfig, backend: Any, handle: Any, plan: Plan,
         return plan.cached
 
     started = time.time()
-    payload = backend.encode(cfg, handle, plan.image, plan.prompt)
+    payload = backend.encode(cfg, handle, plan.images, plan.prompt)
     timings["encode"] = time.time() - started
 
     stored = dict(payload or {})
@@ -531,7 +562,8 @@ def _embeds_meta(cfg: RunConfig, plan: Plan, payload: Any) -> dict[str, Any]:
         # поля 1:1 с run_style.py: по ним старые записи инспектируются без чтения бинаря
         "prompt_md5": plan.prompt_md5,
         "prompt_file": cfg.prompt_file,
-        "image": str(cfg.input),
+        "image": str(cfg.input),                   # первый референс (прежнее поле)
+        "images": [str(p) for p in cfg.inputs][: len(plan.images)],   # все референсы в порядке промта
         "image_sha256_12": plan.img_sha,
         "text_encoder": cfg.encoder.name,
         "encoder_dtype": encoder_dtype_canon(cfg.encoder.dtype),
@@ -705,7 +737,7 @@ def run(cfg: RunConfig, log: "RunLog | None" = None) -> Result:
     """Один кадр: prepare -> encode/кэш -> generate -> release -> upscale -> save.
 
     `log` — открытый `qwenstyle.runlog.RunLog` (его включает `cmd/run.py`); `None` — без лога
-    (так ходят `check-parity` и тесты: они не должны оставлять папок рядом с чужими кадрами).
+    (так ходят `selftest` и тесты: они не должны оставлять папок рядом с чужими кадрами).
     """
     t0 = time.time()
     backend_cls = get_generation(cfg.generation.backend)
@@ -723,7 +755,7 @@ def run(cfg: RunConfig, log: "RunLog | None" = None) -> Result:
     cond = _conditioning(cfg, backend, handle, plan, timings, cleanup)
 
     started = time.time()
-    gen_image = backend.generate(cfg, handle, cond, plan.image, cfg.seed)
+    gen_image = backend.generate(cfg, handle, cond, plan.images, cfg.seed)
     timings["generate"] = time.time() - started
     gen_size = (int(gen_image.size[0]), int(gen_image.size[1]))
 
@@ -810,7 +842,7 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
             continue
         print(f"[batch {index}/{len(seeds)}] seed={seed}", flush=True)
         started = time.time()
-        image = backend.generate(cfg, handle, cond, plan.image, seed)
+        image = backend.generate(cfg, handle, cond, plan.images, seed)
         elapsed = time.time() - started
         used = vram_used_gib()
         print(f"[gen] seed {seed}: {elapsed:.1f}s {image.size[0]}x{image.size[1]}"
@@ -887,6 +919,7 @@ def dry_run(cfg: RunConfig) -> dict[str, Any]:
         "preset": cfg.preset,
         "seed": cfg.seed,
         "input": str(cfg.input),
+        "inputs": [str(p) for p in cfg.inputs][: len(plan.images)],   # уже без отброшенных
         "in_size": f"{plan.in_size[0]}x{plan.in_size[1]}",
         "size_px": cfg.size_px,
         "resolution": plan.resolution,

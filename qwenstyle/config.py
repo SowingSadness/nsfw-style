@@ -443,7 +443,12 @@ class RunConfig:
     generation: GenerationConfig
     upscale: UpscaleConfig = field(default_factory=UpscaleConfig)
     batch: BatchConfig | None = None
+    #: Один вход (совместимый алиас `inputs[0]`): старые вызовы (`cfg.input`) работают без правок.
     input: str = ""
+    #: Все референсы одного запроса (`--input a --input b`); пустой кортеж = T2I без референса.
+    #: Синхронизация с `input` — в `__post_init__`: если задан только `input`, список выводится
+    #: из него; если задан `inputs`, `input` становится его первым элементом.
+    inputs: tuple[str, ...] = ()
     out: str = "out/out.png"
     prompt: str = ""
     prompt_file: str | None = None
@@ -460,7 +465,23 @@ class RunConfig:
     # На кадр и на ключ кэша НЕ влияет: это наблюдение, а не параметр генерации.
     logs: bool = True
 
-    # -- построение -------------------------------------------------------- #
+    def __post_init__(self) -> None:
+        """Синхронизировать `input` (алиас) и `inputs` (полный список референсов).
+
+        Правило одно и не зависит от того, что пришло из пресета, из `--set` или из кода:
+        `inputs` — источник истины, `input` — его первый элемент. Если `inputs` пуст, а `input`
+        задан, список выводится из `input` (прежнее поведение одиночного `--input`).
+        `frozen=True`, поэтому поля меняются через `object.__setattr__` (как в `EncoderConfig`).
+        """
+        raw = self.inputs
+        items = [raw] if isinstance(raw, str) else list(raw or ())
+        cleaned = tuple(str(item).strip() for item in items if str(item or "").strip())
+        single = str(self.input or "").strip()
+        if not cleaned and single:
+            cleaned = (single,)
+        object.__setattr__(self, "inputs", cleaned)
+        object.__setattr__(self, "input", cleaned[0] if cleaned else "")
+
 
     @classmethod
     def from_profile(cls, name: str, **overrides: Any) -> "RunConfig":
@@ -651,6 +672,14 @@ def _build_run_config(data: Mapping[str, Any], touched: set[str] | None = None) 
     data["generation"] = generation_raw
     data["encoder"] = encoder_raw
     data["upscale"] = upscale_raw
+    # `--set input=…` (одиночный путь) — список выводится из него; `--set inputs=a,b` — наоборот.
+    # Без этого `inputs`, унаследованный из пресета, молча перебил бы явно заданный `input`
+    # (`RunConfig.__post_init__` считает `inputs` источником истины).
+    if "input" in touched and "inputs" not in touched:
+        data["inputs"] = ()
+    if isinstance(data.get("inputs"), str):
+        # `--set inputs=a.png,b.png` — строка, а не список: разбиваем по запятой
+        data["inputs"] = tuple(part.strip() for part in data["inputs"].split(",") if part.strip())
     cfg = _build_dataclass(RunConfig, data, "config")
     # Политика вытеснения: единственное место, где `--set cache_supersede=…` проверяется.
     # `--set cache_supersede=none` приходит как None (`_coerce`): это явная политика `none`,
