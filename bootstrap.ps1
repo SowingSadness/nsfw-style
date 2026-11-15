@@ -135,8 +135,8 @@ function Show-ProfilePlanFallback($py, [string]$name) {
 # --------------------------------------------------------------------------- #
 
 Write-Host ''
-Write-Host 'qwenstyle bootstrap - local anime style-transfer and generation' -ForegroundColor White
-Write-Host '18+ / NSFW: adult anime content; model licences belong to their HuggingFace repositories.' -ForegroundColor Gray
+Write-Host 'qwenstyle bootstrap - local NSFW style-transfer and generation' -ForegroundColor White
+Write-Host '18+ / NSFW: adult content; model licences belong to their HuggingFace repositories.' -ForegroundColor Gray
 Write-Note ('root:    ' + $Root)
 Write-Note ('profile: ' + $Profile)
 if ($DryRun) {

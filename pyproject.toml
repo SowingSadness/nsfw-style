@@ -7,12 +7,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qwenstyle"
 version = "0.1.0"
-description = "Local NSFW anime style-transfer and generation on Qwen-Image-2.1 + FUSAL (8/16 GB VRAM)"
+description = "NSFW-style: local style-transfer, editing and generation with Qwen-Image-2.1 (optional FUSAL anime adapter), 8/16 GB VRAM"
 requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
-keywords = ["text-to-image", "img2img", "qwen-image", "lora", "anime", "nsfw", "diffusers"]
+keywords = ["text-to-image", "img2img", "image-editing", "style-transfer", "nsfw", "qwen-image", "lora", "anime", "diffusers"]
 classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Multimedia :: Graphics",

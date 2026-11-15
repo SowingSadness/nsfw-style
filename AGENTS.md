@@ -1,7 +1,8 @@
 # AGENTS.md — контекст проекта для агентов
 
-Локальный style-transfer: **Qwen-Image-2.1** + FUSAL anime LoRA (R80), img2img с сохранением
-композиции. Inference только локальный, на одной RTX 4080 16 ГБ. Точка входа — пакет `qwenstyle`
+Локальный **NSFW-style**: стилизация/правка/генерация на **Qwen-Image-2.1**, опционально аниме-адаптер
+FUSAL (R80 v2), img2img с сохранением композиции. Inference только локальный, на одной RTX 4080 16 ГБ.
+Точка входа — пакет `qwenstyle`
 (`python -m qwenstyle gen|run|selftest|env|cache|models|compare-upscale|bench|config`),
 описание результата и раскладки памяти — `README.md`.
 
@@ -21,6 +22,9 @@
 | 8 ГБ VRAM / 16 ГБ RAM | `weak` | `weak-preview`, `weak-release`, `weak-preview-anime`, `weak-release-anime` (480p/640p, энкодер **CPU** + диск-стриминг, `offload: group`) | ≈ 75 ГиБ | 1080p (ESRGAN ×1.69) |
 | 16 ГБ VRAM / 32 ГБ RAM | `strong` | `strong-preview`, `strong-release`, `strong-preview-anime`, `strong-release-anime` (768p без offload / 960p с `offload: group`, энкодер на GPU) | ≈ 55 ГиБ | 1440p (ESRGAN ×1.5) |
 | 16 ГБ VRAM / 64 ГБ RAM | `flagship` | `flagship-preview`, `flagship-preview-anime`, `flagship-release`, `flagship-release-anime`, `flagship-4k-fast` | ≈ 181 ГиБ | 4K UHD (2160) |
+
+Аниме — опция: ветки `*-anime` включают адаптер FUSAL 0.7; пресеты без суффикса работают без
+стилевого адаптера.
 
 Жёсткие правила рекомендаций:
 

@@ -125,8 +125,8 @@ profile_plan_fallback() {
 # --------------------------------------------------------------------------- #
 
 echo
-echo 'qwenstyle bootstrap - local anime style-transfer and generation'
-echo '18+ / NSFW: adult anime content; model licences belong to their HuggingFace repositories.'
+echo 'qwenstyle bootstrap - local NSFW style-transfer and generation'
+echo '18+ / NSFW: adult content; model licences belong to their HuggingFace repositories.'
 note "root:    $ROOT"
 note "profile: $PROFILE"
 if [ "$DRY_RUN" -eq 1 ]; then
