@@ -43,9 +43,9 @@ from .config import (
     load_prompt,
     prompt_md5,
 )
-from .io import batch_paths, images_sha, log_dir, out_path, save_atomic
+from .io import batch_paths, images_sha, out_path, save_atomic
 from .registry import RegistryError, get_encoder, get_generation, get_upscale
-from .runlog import batch_log_dir
+from .runlog import write_meta
 
 if TYPE_CHECKING:                       # только типы: в рантайме runlog импортируется ниже
     from .runlog import RunLog
@@ -434,8 +434,10 @@ def _plan(cfg: RunConfig, backend_cls: type, *, verbose: bool = False) -> Plan:
     if limit and len(paths) > int(limit):
         total, keep = len(paths), int(limit)
         name = str(getattr(backend_cls, "name", "") or cfg.generation.backend)
+        kept = ", ".join(Path(item).name for item in paths[:keep])
+        dropped = ", ".join(Path(item).name for item in paths[keep:])
         print(f"[in] картинок {total}, бекенд {name} поддерживает {keep} — "
-              f"взяты image1..image{keep} (image{keep + 1}..image{total} отброшены)", flush=True)
+              f"взяты {kept} (отброшены {dropped})", flush=True)
         paths = paths[:keep]
     images = [Image.open(path).convert("RGBA") for path in paths]
     image = images[0] if images else None
@@ -722,32 +724,19 @@ def parse_seeds(spec: str) -> list[int]:
 # Одиночный прогон
 # --------------------------------------------------------------------------- #
 
-def _open_log(log: "RunLog | None", directory: Path, cfg: RunConfig) -> None:
-    """Открыть лог прогона в конкретной папке (no-op без лога — `--no-logs` или вызов из теста).
-
-    Вызывается **после** `_plan`: только там известно настоящее имя кадра (`out_path` с
-    `-s{seed}` и `-x{factor}`), а значит и папка лога (`io.log_dir`). Строки, напечатанные
-    раньше (`[plan]`), уже лежат в буфере `RunLog` и потянутся в файл в момент `attach`.
-
-    `cfg.log_dir` перебивает `directory`: `gen` кладёт `run.log`/`meta.json` в корень сессии
-    (`out/<имя>/gen-<stamp>/`), а не в подпапку кадра. `None` — прежняя раскладка.
-    """
-    if log is None:
-        return
-    explicit = getattr(cfg, "log_dir", None)
-    log.attach(Path(explicit) if explicit else directory, cfg=cfg)
-
-
 def run(cfg: RunConfig, log: "RunLog | None" = None) -> Result:
     """Один кадр: prepare -> encode/кэш -> generate -> release -> upscale -> save.
 
     `log` — открытый `qwenstyle.runlog.RunLog` (его включает `cmd/run.py`); `None` — без лога
-    (так ходят `selftest` и тесты: они не должны оставлять папок рядом с чужими кадрами).
+    и без `<кадр>-meta.json` (так ходят `selftest` и тесты: они не должны оставлять файлов
+    рядом с чужими кадрами).
     """
     t0 = time.time()
     backend_cls = get_generation(cfg.generation.backend)
     plan = _plan(cfg, backend_cls, verbose=True)
-    _open_log(log, log_dir(plan.out_path), cfg)      # папка лога = папка кадра без расширения
+    if log is not None:
+        log.attach(plan.out_path)                   # `<кадр>.log` рядом с кадром
+        write_meta(plan.out_path, cfg)              # параметры известны уже здесь
     _preflight_encoder(cfg, plan.need_encoder)      # до загрузки модели: понятная ошибка
     cleanup = _cleanup_for(cfg)                     # отложенная задача вытеснения кэша
 
@@ -779,6 +768,14 @@ def run(cfg: RunConfig, log: "RunLog | None" = None) -> Result:
     target = save_atomic(result_image, plan.out_path)
     timings["total"] = time.time() - t0
     _print_done(target, gen_size, out_size, timings)
+    if log is not None:
+        write_meta(target, cfg, extra={
+            "seed": int(cfg.seed),
+            "steps": int(cfg.steps),
+            "gen_size": f"{gen_size[0]}x{gen_size[1]}",
+            "out_size": f"{out_size[0]}x{out_size[1]}",
+            "timings": {key: round(float(value), 2) for key, value in timings.items()},
+        })
     # Отложенная очистка — строго после сохранения кадра: удалять кэш до этого нельзя (упади
     # декод/апскейл — остались бы и без кадра, и без старого кэша). При исключении выше
     # до сюда просто не доходит.
@@ -796,12 +793,13 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
 
     Один `prepare` + один `encode`: старт fp8-пайплайна и CPU-энкод платятся ровно раз.
     Генерация каждого seed'а идёт тем же `backend.generate`, что и в `run()`, поэтому один и
-    тот же seed даёт тот же кадр (`s{N}-gen.png`). Модель отпускается **после** всех генераций
-    и **до** первого апскейла: ESRGAN/SeedVR2 должны получить всю VRAM.
+    тот же seed даёт тот же кадр (`<seed>-<steps>-gen.png`). Модель отпускается **после** всех
+    генераций и **до** первого апскейла: ESRGAN/SeedVR2 должны получить всю VRAM.
 
-    Файлы: `<out-dir>/s{N}-gen.png` (чистая генерация, только если апскейл включён и `keep_gen`)
-    и `<out-dir>/s{N}.png` (после апскейла; при выключенном апскейле — сама генерация, без дубля
-    `-gen`). `resume` пропускает seed'ы, у которых `s{N}.png` уже есть.
+    Файлы: `<out-dir>/<seed>-<steps>-gen.png` (чистая генерация, только если апскейл включён и
+    `keep_gen`) и `<out-dir>/<seed>-<steps>.png` (после апскейла; при выключенном апскейле — сама
+    генерация, без дубля `-gen`). `resume` пропускает seed'ы, у которых `<seed>-<steps>.png` уже
+    есть. Лог и meta — у каждого кадра свои: `<seed>-<steps>.log` / `<seed>-<steps>-meta.json`.
     """
     batch: BatchConfig | None = cfg.batch
     if batch is None:
@@ -810,8 +808,6 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
     t0 = time.time()
     backend_cls = get_generation(cfg.generation.backend)
     plan = _plan(cfg, backend_cls, verbose=True)
-    # одна папка лога на сессию: `cfg.log_dir` (gen) или прежний `<out-dir>/_logs/<stamp>`
-    _open_log(log, batch_log_dir(batch.out_dir), cfg)
     seeds = parse_seeds(batch.seeds)
     if not seeds:
         raise ConfigError(f"run_batch: пустой список seed'ов ({batch.seeds!r})")
@@ -820,7 +816,7 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
     out_dir.mkdir(parents=True, exist_ok=True)
     todo: list[int] = []
     for index, seed in enumerate(seeds, start=1):
-        _gen_path, up_path = batch_paths(batch.out_dir, seed)
+        _gen_path, up_path = batch_paths(batch.out_dir, seed, cfg.steps)
         if batch.resume and Path(up_path).is_file():
             print(f"[batch {index}/{len(seeds)}] seed={seed} — пропуск: уже есть {up_path}",
                   flush=True)
@@ -843,9 +839,12 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
 
     frames: list[tuple[int, Any, float]] = []
     for index, seed in enumerate(seeds, start=1):
-        gen_path, _up_path = batch_paths(batch.out_dir, seed)
+        gen_path, up_path = batch_paths(batch.out_dir, seed, cfg.steps)
         if seed not in todo:
             continue
+        if log is not None:
+            log.attach(up_path)                   # свой `.log` у каждого кадра (заголовок копируется)
+            write_meta(up_path, cfg, extra={"seed": int(seed), "steps": int(cfg.steps)})
         print(f"[batch {index}/{len(seeds)}] seed={seed}", flush=True)
         started = time.time()
         image = backend.generate(cfg, handle, cond, plan.images, seed)
@@ -854,7 +853,7 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
         print(f"[gen] seed {seed}: {elapsed:.1f}s {image.size[0]}x{image.size[1]}"
               + (f" peak {used:.1f} GiB" if used is not None else ""), flush=True)
         if batch.keep_gen and plan.factor > 0:
-            # только если апскейл реально изменит кадр: иначе s{N}.png и есть генерация,
+            # только если апскейл реально изменит кадр: иначе <seed>-<steps>.png и есть генерация,
             # и -gen был бы байт-в-байт дублем.
             save_atomic(image, gen_path)          # сразу на диск: прерванный батч не теряет кадры
         frames.append((seed, image, elapsed))
@@ -868,11 +867,22 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
         gen_size = (int(image.size[0]), int(image.size[1]))
         final = image
         elapsed = 0.0
+        _gen_path, up_path = batch_paths(batch.out_dir, seed, cfg.steps)
+        if log is not None:
+            log.attach(up_path)                   # апскейл пишется в лог своего кадра
         if factor > 0:
             final, elapsed = _postprocess(cfg, image, factor, seed)
             up_seconds.append(elapsed)
-        _gen_path, up_path = batch_paths(batch.out_dir, seed)
         target = save_atomic(final, up_path)
+        if log is not None:
+            write_meta(target, cfg, extra={
+                "seed": int(seed),
+                "steps": int(cfg.steps),
+                "gen_size": f"{gen_size[0]}x{gen_size[1]}",
+                "out_size": f"{final.size[0]}x{final.size[1]}",
+                "timings": {"generate": round(float(gen_elapsed), 2),
+                            "upscale": round(float(elapsed), 2)},
+            })
         results.append(Result(image=final, gen_size=gen_size,
                               out_size=(int(final.size[0]), int(final.size[1])),
                               seed=int(seed),
@@ -966,8 +976,8 @@ def dry_run(cfg: RunConfig) -> dict[str, Any]:
             "keep_gen": cfg.batch.keep_gen,
             "resume": cfg.batch.resume,
             "pending": [seed for seed in seeds
-                        if not Path(batch_paths(cfg.batch.out_dir, seed)[1]).is_file()],
-            "files": [batch_paths(cfg.batch.out_dir, seed) for seed in seeds],
+                        if not Path(batch_paths(cfg.batch.out_dir, seed, cfg.steps)[1]).is_file()],
+            "files": [batch_paths(cfg.batch.out_dir, seed, cfg.steps) for seed in seeds],
         }
     # План вытеснения без удаления: что устарело бы при появлении этой пары (crop не участвует).
     # Только на промахе: попадание в кэш ничего не пишет, поэтому и вытеснять нечего — иначе

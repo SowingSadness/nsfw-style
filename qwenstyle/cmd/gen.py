@@ -1,46 +1,55 @@
-"""`python -m qwenstyle gen` — главная команда: папка промта + N seed'ов в одну сессию.
+"""`python -m qwenstyle gen` — главная команда: проект промта + N seed'ов в одну сессию.
 
-Один вход, один выход, ничего не надо собирать из флагов:
+Один проект — одна сцена; внутри несколько промтов (Qwen/H3), общий набор референсов и свой
+каталог результатов:
 
-    prompts/<имя>/
-        prompt.txt          # ровно это имя: текст промта (FUSAL, см. PROMPT_RULES.md)
-        image1.png          # …image10.* — референсы (до `Capabilities.max_images`)
-        image2.jpg
+    prompts/my-project/
+        refs/                      # все png|jpg|jpeg|webp, имена любые, порядок = natural sort
+            01-face.png
+            02-room.jpg
+        prompt-qwen.txt            # tag = "qwen"
+        prompt-h3.txt              # tag = "h3"
+        project.yaml               # опционально: preset + поля RunConfig + prompt/refs/out/seeds
+        out/
+            202611162054-qwen/     # сессия
+                84-25.png          # кадр (seed 84, 25 шагов)
+                84-25-gen.png      # чистая генерация — только если апскейл реально работает
+                84-25.log          # весь вывод этого кадра (`qwenstyle/runlog.py`)
+                84-25-meta.json    # параметры и тайминги кадра
 
-    python -m qwenstyle gen --preset VRAM12 --prompt rainforest --seeds 84
-    python -m qwenstyle gen --preset VRAM8-preview --prompt _demo --count 3
+    python -m qwenstyle gen --preset VRAM12 --prompt my-project/prompt-qwen --seeds 84
+    python -m qwenstyle gen --project prompts/my-project/project.yaml --count 3
+    python -m qwenstyle gen --project prompts/my-project/project.yaml --prompt prompt-h3
 
-Сессия — `out/<имя>/gen-YYYYMMDD-HHMM/` (+`-2`, `-3` при коллизии минуты), в её **корне**:
+`--prompt` — shorthand внутри `prompts/`: `<project>/<stem>` (или `<project>` при единственном
+`*.txt`). Проект, референсы и `out/` выводятся из пути до промта, поэтому `--preset` обязателен
+(если его нет в `project.yaml`). `--project` читает yaml (пресет + любые параметры `RunConfig`)
+и **не** подхватывается автоматически: без него настройки берутся только из флагов.
 
-    s{seed}.png             # готовый кадр (после апскейла, если он включён пресетом)
-    s{seed}-gen.png         # чистая генерация — только если апскейл реально работает
-    run.log                 # весь вывод прогона с метками времени (`qwenstyle/runlog.py`)
-    meta.json               # сессия: пресет, промт, картинки с sha, сиды, тайминги, версии
+Сессия — `<out>/<YYYYMMDDHHMM>-<tag>/`; `--out` задаёт каталог сессий (по умолчанию
+`prompts/<project>/out`). Файлы кадра — `<seed>-<steps>.png`, `<seed>-<steps>-gen.png`,
+`<seed>-<steps>.log`, `<seed>-<steps>-meta.json`.
 
 `--preset` принимает шорткаты (`VRAM8`/`VRAM12`/`VRAM16` = `<family>-release`,
 `<family>-preview`, `-release`, `-preview-anime`, `-release-anime`, `-anime` = `-release-anime`,
 `VRAM16-4k-fast`) и **точное имя любого** зарегистрированного пресета, включая dev-пресеты.
 Регистр не важен: `--preset vram12` = `--preset VRAM12` (а два файла, отличающиеся только
-регистром, — ошибка, а не угадывание). Строка с `/` или `.yaml` считается путём к файлу и
-не трогается.
+регистром, — ошибка, а не угадывание). Строка с `/` или `.yaml` считается путём к файлу.
 `--seeds` (`"84"`, `"32-38"`, `"1,7,42"`) и `--count N` (N случайных сидов) — взаимоисключающие;
 ни одного — один случайный сид (печатается). Без картинок: если пресет требует референс —
 ошибка, иначе T2I (`noref`), а пропорцию кадра задаёт `--aspect`.
 
 Тяжёлых импортов здесь нет: `torch`/`diffusers` тянут бекенды, `pipeline` — только при запуске.
 CLI-часть прежнего `batch` переехала сюда, `pipeline.run_batch`/`io.batch_paths` остались
-внутренним API (шаг 8 плана публикации).
+внутренним API.
 """
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import random
-import re
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -53,22 +62,16 @@ from ..config import (
     prompt_md5,
     readonly_params,
 )
+from ..io import batch_paths
 from ..profiles import PROFILE_ORDER, PROFILES
-from ..runlog import META_NAME
+from ..runlog import write_meta
 from . import parse_sets
+from . import _project as project
 from ._args import UPSCALE_HELP, parse_upscale
 
 NAME = "gen"
-HELP = ("сессия кадров из папки промта: prompts/<имя>/prompt.txt + image*, "
-        "--seeds SPEC | --count N -> out/<имя>/gen-<штамп>/")
-#: Файл промта — ровно это имя (план публикации, решение 11).
-PROMPT_FILE = "prompt.txt"
-#: Каталог пользовательских папок промтов (в `.gitignore`).
-PROMPT_ROOT = "prompts"
-#: Корень результатов: сессия = `<out-root>/<имя>/gen-<штамп>/`.
-OUT_ROOT = "out"
-#: Расширения референсов (регистронезависимо).
-IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+HELP = ("сессия кадров из проекта промта: prompts/<project>/refs + prompt-<model>.txt, "
+        "--seeds SPEC | --count N -> <project>/out/<штамп>-<tag>/")
 #: Расширения, по которым `--preset` — путь к файлу, а не имя пресета.
 PATH_SUFFIXES = (".yaml", ".yml")
 #: Диапазон случайных сидов (`--count`): положительные 32-битные, как `--seed`.
@@ -166,63 +169,22 @@ def resolve_preset(raw: str) -> str:
 
 
 def preset_hint() -> str:
-    """Строка для ошибки «нет --preset»: что вообще можно передать."""
-    return (f"укажите --preset: {', '.join(public_presets())} "
-            f"(или шорткат VRAM8|VRAM12|VRAM16 = <family>-release)")
+    """Строка для ошибки «нет пресета»: что вообще можно передать."""
+    return (f"укажите --preset, {project.DEFAULT_PROJECT_FILE} с preset: в проекте, "
+            f"или --project <yaml>: {', '.join(public_presets())} "
+            f"(шорткат VRAM8|VRAM12|VRAM16 = <family>-release)")
 
 
-# --------------------------------------------------------------------------- #
-# Папка промта и референсы
-# --------------------------------------------------------------------------- #
-
-def prompt_dir(name: str) -> Path:
-    """`prompts/<имя>` — папка промта (пользовательская, в `.gitignore`).
-
-    Имя обязано остаться внутри `prompts/`: `..`, абсолютные пути и всё, что после `resolve()`
-    выходит из корня, отклоняется (`ConfigError`), иначе `--prompt ../../etc` читал бы промт
-    и писал сессию вне проекта.
-    """
-    raw = str(name or "").strip()
-    root = Path(PROMPT_ROOT)
-    inside = False
-    if raw and not Path(raw).is_absolute() and ".." not in Path(raw).parts:
-        try:
-            inside = (root / raw).resolve().is_relative_to(root.resolve())
-        except (OSError, ValueError):             # нерезолвимый путь — считаем выходом из prompts/
-            inside = False
-    if not inside:
-        raise ConfigError(f"имя папки промта должно быть внутри {PROMPT_ROOT}/ "
-                          f"(без .. и абсолютных путей)")
-    return root / raw
-
-
-def _natural_key(path: Path) -> tuple:
-    """Естественная сортировка: `image2` раньше `image10`; файлы без числа — в конце.
-
-    Ключ — кортеж из (флаг «нет числа», куски имени, полное имя), поэтому сравнение не зависит
-    от длины имён и не падает на смешанных типах (`image1` vs `image10`, `image` vs `image1`).
-    """
-    parts = [part for part in re.split(r"(\d+)", path.stem.lower()) if part]
-    has_number = any(part.isdigit() for part in parts)
-    chunks = tuple((0, int(part)) if part.isdigit() else (1, part) for part in parts)
-    return (0 if has_number else 1, chunks, path.name.lower())
-
-
-def discover_images(folder: Path) -> list[Path]:
-    """Все `image*.{png,jpg,jpeg,webp}` папки промта в естественном порядке.
-
-    Другие файлы (`prompt.txt`, заметки, `.gitkeep`) игнорируются: референс — это только файл
-    с префиксом `image`. Регистр расширения и имени не важен (`IMAGE1.PNG` — тоже референс).
-    """
-    if not folder.is_dir():
-        return []
-    found = [
-        item for item in folder.iterdir()
-        if item.is_file()
-        and item.suffix.lower() in IMAGE_SUFFIXES
-        and item.stem.lower().startswith("image")
-    ]
-    return sorted(found, key=_natural_key)
+def preset_source(args: argparse.Namespace, spec: project.ProjectSpec | None) -> str | Mapping[str, Any]:
+    """Пресет: `--preset` -> `project.yaml: preset` -> ошибка. Шорткаты разрешаются здесь."""
+    raw = getattr(args, "preset", None)
+    source = raw if raw else (spec.preset if spec is not None else None)
+    if source is None or (not isinstance(source, Mapping) and not str(source).strip()):
+        raise ConfigError(preset_hint())
+    if isinstance(source, Mapping):
+        return source
+    text = str(source).strip()
+    return text if looks_like_path(text) else resolve_preset(text)
 
 
 # --------------------------------------------------------------------------- #
@@ -255,10 +217,22 @@ def _unique(seeds: list[int], source: str) -> list[int]:
     return unique
 
 
-def resolve_seeds(spec: str | None, count: int | None) -> list[int]:
-    """`--seeds SPEC` XOR `--count N`; ни одного — один случайный сид (печатается)."""
+def _parse_seed_spec(spec: str, source: str) -> list[int]:
+    """`--seeds`/`seeds:` из yaml -> список сидов (логика `pipeline.parse_seeds`)."""
     from ..pipeline import parse_seeds             # локально: `gen --help` без оркестратора
 
+    seeds = parse_seeds(str(spec))
+    if not seeds:
+        raise ConfigError(f"{source} {spec!r}: пустой список сидов")
+    return _unique(seeds, source)
+
+
+def resolve_seeds(spec: str | None, count: int | None,
+                  project_spec: project.ProjectSpec | None = None) -> list[int]:
+    """CLI `--seeds` XOR `--count`; иначе `seeds/count` из `project.yaml`; иначе 1 случайный.
+
+    CLI главнее yaml: если задан любой из флагов, значения из yaml не участвуют.
+    """
     if spec and count is not None:
         raise ConfigError("--seeds и --count взаимоисключающие: оставьте одно "
                           "(--seeds '84' или --count 3)")
@@ -267,10 +241,14 @@ def resolve_seeds(spec: str | None, count: int | None) -> list[int]:
             raise ConfigError(f"--count ждёт N >= 1, получено {count}")
         return random_seeds(int(count))
     if spec:
-        seeds = parse_seeds(str(spec))
-        if not seeds:
-            raise ConfigError(f"--seeds {spec!r}: пустой список сидов")
-        return _unique(seeds, "--seeds")
+        return _parse_seed_spec(spec, "--seeds")
+    if project_spec is not None:
+        if project_spec.count is not None:
+            if int(project_spec.count) < 1:
+                raise ConfigError(f"count в {project.DEFAULT_PROJECT_FILE} ждёт N >= 1")
+            return random_seeds(int(project_spec.count))
+        if project_spec.seeds:
+            return _parse_seed_spec(project_spec.seeds, f"seeds в {project.DEFAULT_PROJECT_FILE}")
     return random_seeds(1)
 
 
@@ -280,51 +258,28 @@ def seeds_text(seeds: list[int]) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Сессия
-# --------------------------------------------------------------------------- #
-
-def session_dir(prompt: str, out_root: str = OUT_ROOT, *, now: time.struct_time | None = None) -> Path:
-    """`out/<имя>/gen-YYYYMMDD-HHMM`, при коллизии минуты — `-2`, `-3`, …
-
-    Каталог **не создаётся** (это делает `run_batch`): `--dry-run` не должен оставлять следов.
-    """
-    stamp = time.strftime("%Y%m%d-%H%M", now or time.localtime())
-    base = Path(out_root) / str(prompt)
-    candidate = base / f"gen-{stamp}"
-    index = 2
-    while candidate.exists():
-        candidate = base / f"gen-{stamp}-{index}"
-        index += 1
-    return candidate
-
-
-def posix(path: str | Path) -> str:
-    """Путь с прямыми `/` (в логах и `meta.json` Windows-бэкслэши читаются плохо)."""
-    return Path(path).as_posix()
-
-
-# --------------------------------------------------------------------------- #
 # Конфиг
 # --------------------------------------------------------------------------- #
 
-def build_config(args: argparse.Namespace, *, preset: str, prompt_file: Path,
-                 images: list[Path], seeds: list[int], session: Path) -> RunConfig:
-    """Флаги `gen` -> `RunConfig`: пресет + сессия (кадры, seeds, лог, промт, референсы).
+def build_config(args: argparse.Namespace, *, spec: project.ProjectSpec | None,
+                 prompt: project.ProjectPrompt, images: list[Path], seeds: list[int],
+                 session: Path) -> tuple[RunConfig, dict[str, Any]]:
+    """Флаги `gen` -> `RunConfig`: project.yaml -> CLI -> производные сессии.
 
-    Батч-секция задаётся целиком: пресеты её не содержат, а `run_batch` требует `seeds`/`out_dir`.
-    `resume=False` — внутри одной сессии нечего пропускать, а старое имя не должно молча
-    оставлять кадр от прошлого прогона.
+    Возвращает `(cfg, user_sets)`, где `user_sets` — только явные `--set` (для предупреждения
+    о readonly-параметрах модели, которые перекрыл пресет).
     """
     overrides: dict[str, Any] = dict(parse_sets(getattr(args, "sets", None)))
-    user_sets = dict(overrides)                      # только то, что задал пользователь
+    user_sets = dict(overrides)
+    cfg = project.build_run_config(spec, preset_source(args, spec))
+    steps = int(cfg.steps)
     first_seed = int(seeds[0])
+    _gen_path, up_path = batch_paths(posix(session), first_seed, steps)
     overrides.update({
-        "prompt_file": posix(prompt_file),
+        "prompt_file": posix(prompt.prompt_file),
         "inputs": tuple(posix(path) for path in images),
         "seed": first_seed,
-        # `out` нужен только для плана (`_plan`/`--dry-run`): кадры пишет `run_batch` по batch_paths
-        "out": posix(Path(session) / f"s{first_seed}.png"),
-        "log_dir": posix(session),
+        "out": up_path,
         "batch": {
             "seeds": ",".join(str(int(seed)) for seed in seeds),
             "out_dir": posix(session),
@@ -342,12 +297,12 @@ def build_config(args: argparse.Namespace, *, preset: str, prompt_file: Path,
             overrides["upscale.factor"] = float(value)
     if getattr(args, "no_logs", False):
         overrides["logs"] = False
-    cfg = RunConfig.from_profile(preset, **overrides)
+    cfg = cfg.merged(**overrides)
     # Параметры объявляет адаптер модели: если `--set` попал в readonly (например `steps` у H3,
     # где расписание PDD задаёт ровно 6 шагов), предупреждаем, а не делаем вид, что применилось.
-    for spec in readonly_params(cfg, user_sets):
-        print(f"[gen] {spec.readonly_note()}, значение проигнорировано", flush=True)
-    return cfg
+    for item in readonly_params(cfg, user_sets):
+        print(f"[gen] {item.readonly_note()}, значение проигнорировано", flush=True)
+    return cfg, user_sets
 
 
 def backend_caps(cfg: RunConfig) -> Any:
@@ -363,7 +318,7 @@ def apply_image_limit(cfg: RunConfig, images: list[Path], preset: str,
 
     Повторяет правило `pipeline._plan` (первое место, знающее caps), но здесь — **до** плана,
     чтобы сообщение говорило о пресете и настоящих именах файлов:
-    `[gen] картинок 12, пресет VRAM12-release поддерживает 10 — взяты image1..image10 …`.
+    `[gen] картинок 12, пресет VRAM12-release поддерживает 10 — взяты 01-a.png …`.
     """
     limit = getattr(caps, "max_images", None)
     if not limit or len(images) <= int(limit):
@@ -371,8 +326,8 @@ def apply_image_limit(cfg: RunConfig, images: list[Path], preset: str,
     keep = int(limit)
     kept, dropped = images[:keep], images[keep:]
     print(f"[gen] картинок {len(images)}, пресет {preset} поддерживает {keep} — "
-          f"взяты {kept[0].stem}..{kept[-1].stem} "
-          f"({dropped[0].stem}..{dropped[-1].stem} отброшены)", flush=True)
+          f"взяты {kept[0].name}..{kept[-1].name} "
+          f"({dropped[0].name}..{dropped[-1].name} отброшены)", flush=True)
     return cfg.merged(inputs=tuple(posix(path) for path in kept)), kept
 
 
@@ -380,35 +335,44 @@ def apply_image_limit(cfg: RunConfig, images: list[Path], preset: str,
 # Печать
 # --------------------------------------------------------------------------- #
 
-def print_session(cfg: RunConfig, preset: str, session: Path, images: list[Path],
-                  seeds: list[int]) -> None:
-    """Шапка сессии: куда пишем, чем и с какими сидами (без весов и без сети)."""
-    gen = cfg.generation
-    lora = gen.lora.scale if gen.lora else None
-    lora_text = f"{float(lora):g}" if lora is not None else "—"
-    print(f"[gen] сессия {posix(session)}", flush=True)
-    print(f"[gen] пресет {preset} · backend {gen.backend} · {cfg.steps} шагов · "
-          f"lora {lora_text} · энкодер {cfg.encoder.name}", flush=True)
-    print(f"[gen] промт {posix(cfg.prompt_file or '')} (md5 {prompt_md5(_prompt_text(cfg))})",
-          flush=True)
-    if images:
-        print(f"[gen] референсов {len(images)}: "
-              f"{', '.join(path.name for path in images)}", flush=True)
-    else:
-        print(f"[gen] референсов 0 — T2I (noref), пропорция кадра: "
-              f"{cfg.aspect or '1:1 (--aspect не задан)'}", flush=True)
-    print(f"[gen] сиды {len(seeds)}: {seeds_text(seeds)}", flush=True)
+def posix(path: str | Path) -> str:
+    """Путь с прямыми `/` (в логах и `meta.json` Windows-бэкслэши читаются плохо)."""
+    return Path(path).as_posix()
 
 
 def _prompt_text(cfg: RunConfig) -> str:
-    """Текст промта (для md5 в шапке и `meta.json`); ошибка чтения не роняет сессию."""
+    """Текст промта (для md5 в шапке и meta); ошибка чтения не роняет сессию."""
     try:
         return load_prompt(cfg)
     except OSError:
         return ""
 
 
-def print_plan(cfg: RunConfig, info: dict[str, Any], session: Path, seeds: list[int]) -> None:
+def print_session(cfg: RunConfig, session: Path, prompt: project.ProjectPrompt,
+                  project_path: Path | None, images: list[Path], seeds: list[int]) -> None:
+    """Шапка сессии: куда пишем, чем и с какими сидами (без весов и без сети)."""
+    gen = cfg.generation
+    lora = gen.lora.scale if gen.lora else None
+    lora_text = f"{float(lora):g}" if lora is not None else "—"
+    source = f"project.yaml: {posix(project_path)}" if project_path else "только CLI"
+    print(f"[gen] проект {posix(prompt.project_dir)} ({source})", flush=True)
+    print(f"[gen] пресет {cfg.preset or '-'} · backend {gen.backend} · {cfg.steps} шагов · "
+          f"lora {lora_text} · энкодер {cfg.encoder.name}", flush=True)
+    print(f"[gen] промт {posix(cfg.prompt_file or '')} (md5 {prompt_md5(_prompt_text(cfg))})",
+          flush=True)
+    if images:
+        refs = ", ".join(f"{path.name} → <image{index}>"
+                         for path, index in project.placeholder_map(images))
+        print(f"[gen] референсы {len(images)}: {refs}", flush=True)
+    else:
+        print(f"[gen] референсов 0 — T2I (noref), пропорция кадра: "
+              f"{cfg.aspect or '1:1 (--aspect не задан)'}", flush=True)
+    print(f"[gen] сессия {posix(session)}", flush=True)
+    print(f"[gen] сиды {len(seeds)}: {seeds_text(seeds)}", flush=True)
+
+
+def print_plan(cfg: RunConfig, info: dict[str, Any], session: Path, seeds: list[int],
+               steps: int) -> None:
     """`--dry-run`: сетка, ключ кэша, нужен ли энкодер, фактор и имена файлов сессии."""
     lora = (info.get("lora") or {}).get("scale")
     lora_text = f"{float(lora):g}" if lora is not None else "—"
@@ -428,9 +392,10 @@ def print_plan(cfg: RunConfig, info: dict[str, Any], session: Path, seeds: list[
     print(f"[plan] upscale {info.get('upscale_backend')} factor={factor:g} "
           f"target_height={target if target else '-'} -> out {info.get('out_size')}"
           + (" (пропущен)" if info.get("upscale_skipped") else ""), flush=True)
-    files = f"{posix(session)}/s{{N}}.png"
+    frame = f"{posix(session)}/<seed>-{int(steps)}.png"
+    files = f"{frame} + <seed>-{int(steps)}.log + <seed>-{int(steps)}-meta.json"
     if factor > 0:
-        files += " + s{N}-gen.png (апскейл включён)"
+        files += f" + <seed>-{int(steps)}-gen.png (апскейл включён)"
     print(f"[plan] файлы сессии: {files}", flush=True)
     print(f"[plan] сиды {len(seeds)}: {seeds_text(seeds)}", flush=True)
     print(f"[plan] dry-run: модель не загружается, энкод не платится "
@@ -438,7 +403,7 @@ def print_plan(cfg: RunConfig, info: dict[str, Any], session: Path, seeds: list[
 
 
 # --------------------------------------------------------------------------- #
-# meta.json сессии
+# meta.json кадров
 # --------------------------------------------------------------------------- #
 
 def _versions() -> dict[str, str]:
@@ -456,71 +421,6 @@ def _versions() -> dict[str, str]:
     return data
 
 
-def write_session_meta(directory: Path, cfg: RunConfig, *, preset: str, images: list[Path],
-                       seeds: list[int], results: list[Any] | None = None,
-                       elapsed: float = 0.0) -> Path | None:
-    """`meta.json` в корне сессии: чем сделан кадр + его сиды, картинки, тайминги, версии.
-
-    `runlog._write_meta` кладёт туда же `created`/`argv`/`params` в момент открытия лога —
-    здесь запись дополняется данными сессии (`session`) и таймингами, уже известными после
-    генерации. Существующий файл не теряется: читается, дополняется, пишется атомарно.
-    """
-    path = Path(directory) / META_NAME
-    data: dict[str, Any] = {}
-    if path.is_file():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                data = loaded
-        except (OSError, ValueError):
-            data = {}
-    data.setdefault("created", time.strftime("%Y-%m-%d %H:%M:%S"))
-    data["argv"] = list(sys.argv)
-    try:
-        data["params"] = cfg.to_mapping()
-    except Exception:                               # noqa: BLE001 — метаданные не роняют сессию
-        pass
-
-    frames: list[dict[str, Any]] = []
-    for result in results or []:
-        frames.append({
-            "seed": int(result.seed),
-            "file": Path(result.out_path).name if result.out_path else None,
-            "gen_size": "%dx%d" % result.gen_size,
-            "out_size": "%dx%d" % result.out_size,
-            "timings": {key: round(float(value), 2) for key, value in result.timings.items()},
-        })
-    count = len(frames)
-    data["session"] = {
-        "preset": preset,
-        "dir": posix(directory),
-        "prompt_dir": posix(Path(cfg.prompt_file or "").parent),
-        "prompt_file": cfg.prompt_file,
-        "prompt_md5": prompt_md5(_prompt_text(cfg)),
-        "images": [{"file": path.name, "sha": _image_sha(path)} for path in images],
-        "seeds": [int(seed) for seed in seeds],
-        "frames": frames,
-        "totals": {
-            "frames": count,
-            "total_s": round(float(elapsed), 1),
-            "per_frame_s": round(float(elapsed) / count, 1) if count else None,
-        },
-        "versions": _versions(),
-    }
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        try:
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, path)
-        finally:
-            tmp.unlink(missing_ok=True)
-    except OSError as exc:
-        print(f"[gen] не удалось записать {posix(path)}: {exc}", file=sys.stderr, flush=True)
-        return None
-    return path
-
-
 def _image_sha(path: Path) -> str:
     """Короткий sha256 файла — тот же, что в ключе кэша эмбеддингов (`io.image_sha`)."""
     from ..io import image_sha
@@ -531,61 +431,107 @@ def _image_sha(path: Path) -> str:
         return ""
 
 
+def write_session_meta(cfg: RunConfig, *, prompt: project.ProjectPrompt,
+                       project_path: Path | None, refs_dir: Path, images: list[Path],
+                       seeds: list[int], results: list[Any] | None = None,
+                       elapsed: float = 0.0) -> None:
+    """`<кадр>-meta.json` для каждого кадра сессии (общая часть + тайминги своего seed'а).
+
+    Кадр, его `.log` и meta лежат рядом; общих `meta.json` в корне сессии больше нет.
+    `pipeline.run_batch` уже записал в meta параметры и seed до генерации — здесь запись
+    дополняется сессией (проект, промт, референсы, версии) и таймингами.
+    """
+    session_info: dict[str, Any] = {
+        "project": posix(project_path) if project_path else None,
+        "prompt_dir": posix(prompt.project_dir),
+        "prompt_file": posix(prompt.prompt_file),
+        "prompt_stem": prompt.prompt_stem,
+        "tag": prompt.tag,
+        "prompt_md5": prompt_md5(_prompt_text(cfg)),
+        "refs_dir": posix(refs_dir),
+        "images": [{"file": path.name, "sha": _image_sha(path),
+                    "placeholder": f"<image{index}>"}
+                   for path, index in project.placeholder_map(images)],
+        "preset": cfg.preset,
+        "seeds": [int(seed) for seed in seeds],
+        "versions": _versions(),
+    }
+    frames: list[dict[str, Any]] = []
+    for result in results or []:
+        frames.append({
+            "seed": int(result.seed),
+            "file": Path(result.out_path).name if result.out_path else None,
+            "gen_size": "%dx%d" % result.gen_size,
+            "out_size": "%dx%d" % result.out_size,
+            "timings": {key: round(float(value), 2) for key, value in result.timings.items()},
+        })
+    count = len(frames)
+    session_info["frames"] = frames
+    session_info["totals"] = {
+        "frames": count,
+        "total_s": round(float(elapsed), 1),
+        "per_frame_s": round(float(elapsed) / count, 1) if count else None,
+    }
+    for result in results or []:
+        if result.out_path is None:
+            continue
+        write_meta(result.out_path, cfg, extra={
+            "seed": int(result.seed),
+            "steps": int(cfg.steps),
+            "gen_size": "%dx%d" % result.gen_size,
+            "out_size": "%dx%d" % result.out_size,
+            "timings": {key: round(float(value), 2) for key, value in result.timings.items()},
+            "session": session_info,
+        })
+
+
 # --------------------------------------------------------------------------- #
 # Прогон
 # --------------------------------------------------------------------------- #
 
 def run(args: argparse.Namespace) -> int:
-    if not str(getattr(args, "preset", "") or "").strip():
-        print(f"[gen] {preset_hint()}", file=sys.stderr, flush=True)
-        return 2
     try:
-        preset = resolve_preset(args.preset)
-    except ConfigError as exc:
-        print(f"[gen] {exc}", file=sys.stderr, flush=True)
-        return 2
+        project_path: Path | None = None
+        spec: project.ProjectSpec | None = None
+        if getattr(args, "project", None):
+            project_path = project.resolve_project(args.project)
+            spec = project.load_project(project_path)
 
-    prompt_name = str(getattr(args, "prompt", "") or "").strip()
-    if not prompt_name:
-        print(f"[gen] укажите --prompt: имя папки в {PROMPT_ROOT}/ "
-              f"({PROMPT_ROOT}/<имя>/{PROMPT_FILE} + image*)", file=sys.stderr, flush=True)
-        return 2
-    try:
-        folder = prompt_dir(prompt_name)
-    except ConfigError as exc:                       # `..`/абсолютный путь: выход из prompts/
-        print(f"[gen] {exc}", file=sys.stderr, flush=True)
-        return 2
-    prompt_file = folder / PROMPT_FILE
-    if not prompt_file.is_file():
-        print(f"[gen] нет {posix(prompt_file)} — положите текст промта в этот файл",
-              file=sys.stderr, flush=True)
-        return 2
+        prompt: project.ProjectPrompt | None = None
+        if getattr(args, "prompt", None):
+            prompt = project.resolve_prompt(args.prompt)
+        elif spec is not None and spec.prompt is not None:
+            prompt = spec.prompt
+        if prompt is None:
+            print(f"[gen] укажите --prompt <project>/<prompt> или --project "
+                  f"<{project.DEFAULT_PROJECT_FILE}>", file=sys.stderr, flush=True)
+            return 2
 
-    images = discover_images(folder)
-    try:
-        seeds = resolve_seeds(getattr(args, "seeds", None), getattr(args, "count", None))
-    except ConfigError as exc:
-        print(f"[gen] {exc}", file=sys.stderr, flush=True)
-        return 2
-
-    session = session_dir(prompt_name)
-    try:
-        cfg = build_config(args, preset=preset, prompt_file=prompt_file, images=images,
-                           seeds=seeds, session=session)
+        refs_dir = (spec.refs_dir if spec is not None and spec.refs_dir is not None
+                    else prompt.project_dir / project.DEFAULT_REFS_DIR)
+        out_dir = (Path(args.out) if getattr(args, "out", None)
+                   else (spec.out_dir if spec is not None and spec.out_dir is not None
+                         else prompt.project_dir / project.DEFAULT_OUT_DIR))
+        images = project.discover_refs(refs_dir)
+        seeds = resolve_seeds(getattr(args, "seeds", None), getattr(args, "count", None), spec)
+        session = project.session_dir(out_dir, prompt.tag)
+        cfg, _ = build_config(args, spec=spec, prompt=prompt, images=images,
+                              seeds=seeds, session=session)
+        preset_label = str(cfg.preset or (spec.preset if spec is not None else "-"))
         caps = backend_caps(cfg)
-        cfg, images = apply_image_limit(cfg, images, preset, caps)
+        cfg, images = apply_image_limit(cfg, images, preset_label, caps)
     except (ConfigError, ValueError) as exc:         # ValueError — от --upscale (мусор/пусто)
         print(f"[gen] {exc}", file=sys.stderr, flush=True)
         return 2
 
     requires_image = bool(getattr(caps, "requires_image", True))
     if not images and requires_image:
-        print(f"[gen] в {posix(folder)} нет картинок (image*.png|jpg|jpeg|webp), а пресет "
-              f"{preset} требует референс — положите image1.png рядом с {PROMPT_FILE}",
+        print(f"[gen] в {posix(refs_dir)} нет картинок (png|jpg|jpeg|webp), а пресет "
+              f"{preset_label} требует референс — положите файлы в refs/",
               file=sys.stderr, flush=True)
         return 2
 
-    print_session(cfg, preset, session, images, seeds)
+    print_session(cfg, session, prompt, project_path, images, seeds)
 
     from .. import pipeline                          # локально: `gen --help` без каркаса и torch
 
@@ -595,30 +541,36 @@ def run(args: argparse.Namespace) -> int:
         except ConfigError as exc:
             print(f"[gen] {exc}", file=sys.stderr, flush=True)
             return 2
-        print_plan(cfg, info, session, seeds)
+        print_plan(cfg, info, session, seeds, int(cfg.steps))
         return 0
 
     from ..runlog import RunLog
 
     results: list[Any] = []
     started = time.time()
-    with RunLog(cfg.logs) as log:
-        try:
-            results = pipeline.run_batch(cfg, log=log)
-        except ConfigError as exc:
-            print(f"[gen] {exc}", file=sys.stderr, flush=True)
-            return 2
-        except (OSError, RuntimeError) as exc:       # веса/VRAM/диск: понятная строка + код 2
-            print(f"[gen] сессия не завершена: {type(exc).__name__}: {exc}",
-                  file=sys.stderr, flush=True)
-            return 2
-        elapsed = time.time() - started
-        write_session_meta(session, cfg, preset=preset, images=images, seeds=seeds,
-                           results=results, elapsed=elapsed)
-        count = len(results)
-        average = (elapsed / count) if count else 0.0
-        print(f"[gen] итог: {count} кадр(ов) в {posix(session)} · всего {elapsed:.1f}s · "
-              f"среднее {average:.1f}s/кадр", flush=True)
+    try:
+        with RunLog(cfg.logs) as log:
+            try:
+                results = pipeline.run_batch(cfg, log=log)
+            except ConfigError as exc:
+                print(f"[gen] {exc}", file=sys.stderr, flush=True)
+                return 2
+            except (OSError, RuntimeError) as exc:       # веса/VRAM/диск: понятная строка + код 2
+                print(f"[gen] сессия не завершена: {type(exc).__name__}: {exc}",
+                      file=sys.stderr, flush=True)
+                return 2
+            elapsed = time.time() - started
+            write_session_meta(cfg, prompt=prompt, project_path=project_path,
+                               refs_dir=refs_dir, images=images, seeds=seeds,
+                               results=results, elapsed=elapsed)
+            count = len(results)
+            average = (elapsed / count) if count else 0.0
+            print(f"[gen] итог: {count} кадр(ов) в {posix(session)} · всего {elapsed:.1f}s · "
+                  f"среднее {average:.1f}s/кадр", flush=True)
+    except OSError as exc:                           # лог/диск упали вне run_batch
+        print(f"[gen] сессия не завершена: {type(exc).__name__}: {exc}", file=sys.stderr,
+              flush=True)
+        return 2
     return 0
 
 
@@ -633,8 +585,16 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                              "-release|-preview-anime|-release-anime|-anime, VRAM16-4k-fast "
                              "или точное имя любого пресета из qwenstyle/presets/; регистр не важен")
     source.add_argument("--prompt", default=None, metavar="NAME",
-                        help=f"папка промта {PROMPT_ROOT}/NAME/: {PROMPT_FILE} (текст) + "
-                             f"image*.png|jpg|jpeg|webp (референсы, до max_images модели)")
+                        help="промт проекта: <project>/<prompt-stem> (или <project> при "
+                             "единственном *.txt); референсы — <project>/refs/, результаты — "
+                             "<project>/out/")
+    source.add_argument("--project", default=None, metavar="PATH",
+                        help=f"project.yaml (файл, каталог или имя проекта в "
+                             f"{project.PROMPT_ROOT}/): preset + любые поля RunConfig поверх него; "
+                             f"флаги CLI главнее yaml")
+    source.add_argument("--out", default=None, metavar="DIR",
+                        help="каталог сессий (по умолчанию <project>/out); сессия — "
+                             "<YYYYMMDDHHMM>-<tag> внутри него")
     source.add_argument("--aspect", choices=tuple(ASPECT_RATIOS), default=None, metavar="R",
                         help="пропорция кадра (по умолчанию — пропорция первого референса; "
                              "для T2I без флага — 1:1)")
@@ -654,9 +614,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     run_group.add_argument("--dry-run", action="store_true",
                            help="только план (сетка, ключ кэша, сессия) без загрузки весов")
     run_group.add_argument("--no-logs", dest="no_logs", action="store_true",
-                           help="не писать run.log в папку сессии (кадры и meta.json остаются)")
+                           help="не писать <кадр>.log (кадры и <кадр>-meta.json остаются)")
 
 
 __all__ = ["HELP", "NAME", "PATH_SUFFIXES", "add_args", "build_config", "casefold_index",
-           "discover_images", "looks_like_path", "preset_aliases", "public_presets",
-           "resolve_preset", "resolve_seeds", "run", "session_dir"]
+           "looks_like_path", "preset_aliases", "preset_source", "public_presets",
+           "resolve_preset", "resolve_seeds", "run", "write_session_meta"]

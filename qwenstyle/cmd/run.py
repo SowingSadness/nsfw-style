@@ -8,7 +8,9 @@
 
     --input PATH               -> inputs (кортеж; повтор флага = несколько референсов),
                                   а input остаётся алиасом первого (inputs[0])
-    --out PATH                 -> out                      (теги -x{factor} и -s{seed} добавит io)
+    --out PATH                 -> out   (без расширения картинки = каталог: кадр
+                                  <seed>-<steps>.png внутрь; *.png = файл, к имени добавятся
+                                  теги -<seed>-<steps> и -x{factor})
     --lora-scale F             -> generation.lora.scale     (бесплатная ось: ключ кэша не меняет)
     --model base|turbo         -> пресет (base/turbo)       (turbo — только по явному флагу)
     --preview                  -> preview=True + resolution=640 + steps=8
@@ -45,11 +47,12 @@
     --set KEY=VALUE            -> точечный параметр RunConfig (повторяемый)
     --dry-run                  -> печать плана (crop, ключ кэша, нужен ли энкодер, шаги, фактор)
                                   без загрузки весов; exit 0
-    --no-logs                  -> не создавать подпапку кадра с логом (`RunConfig.logs=False`)
+    --no-logs                  -> не писать <кадр>.log (`RunConfig.logs=False`; meta остаётся)
 
-Логи (`qwenstyle/runlog.py`): каждый прогон пишет свой `run.log` и `meta.json` в папку кадра
-(`out/x-s7.png` -> `out/x-s7/run.log`). Tee включается **до** первой печати (с `[profile]`),
-а файл открывается в `pipeline.run` сразу после `_plan` — только там известно имя кадра с тегами.
+Логи (`qwenstyle/runlog.py`): каждый прогон пишет `<кадр>.log` и `<кадр>-meta.json` **рядом
+с кадром** (`out/x-7-25.png` -> `out/x-7-25.log`, `out/x-7-25-meta.json`). Tee включается
+**до** первой печати (с `[profile]`), а файл открывается в `pipeline.run` сразу после `_plan` —
+только там известно имя кадра с тегами.
 
 Поведение веток сохранено: профиль по умолчанию base; `--size <= 480p` включает черновые
 8 шагов (как `--preview`); `steps` по умолчанию 8 в preview и 25 в base (у turbo — 8 из пресета
@@ -85,6 +88,8 @@ from ..config import (
     available_presets,
     readonly_params,
 )
+from ..io import IMAGE_SUFFIXES, frame_stem
+from ..runlog import log_path, meta_path
 from . import parse_sets
 from ._args import UPSCALE_HELP, parse_upscale
 
@@ -159,6 +164,25 @@ def model_label(cfg: RunConfig) -> str:
     if lora and lora != BASE_LORA:
         return preset                                   # другой адаптер = другой профиль
     return "base"
+
+
+def resolve_out(cfg: RunConfig) -> RunConfig:
+    """`--out` каталогом = кадр внутрь; файлом (`*.png|jpg|jpeg|webp`) = дописать теги.
+
+    Каталог (`D:/renders/camp`): `cfg.out = D:/renders/camp/<seed>-<steps>.png`, а `io.out_path`
+    видит готовые теги и не дублирует их. Файл — прежний режим: имя выбирает пользователь,
+    `io.out_path` дописывает `-<seed>-<steps>` (и `-x{factor}` при апскейле).
+    """
+    raw = str(cfg.out or "").strip().replace("\\", "/")
+    if not raw or raw.lower().endswith(IMAGE_SUFFIXES):
+        return cfg
+    if Path(raw).is_file():
+        raise ConfigError(
+            f"--out {raw}: это файл без расширения картинки; укажите каталог "
+            f"или файл *.png|jpg|jpeg|webp"
+        )
+    frame = f"{raw.rstrip('/')}/{frame_stem(cfg.seed, cfg.steps)}.png"
+    return cfg.merged(out=frame)
 
 
 def build_config(args: argparse.Namespace) -> RunConfig:
@@ -263,6 +287,7 @@ def build_config(args: argparse.Namespace) -> RunConfig:
         upscale = replace(upscale, color_fix="none")
     if generation is not cfg.generation or upscale is not cfg.upscale:
         cfg = replace(cfg, generation=generation, upscale=upscale)
+    cfg = resolve_out(cfg)
     # Параметры объявляет адаптер модели (`parameters()`): если флаг/`--set` попал в readonly
     # (например `steps` у MiniMax-H3: расписание PDD задаёт 6 шагов), предупреждаем.
     for spec in readonly_params(cfg, overrides):
@@ -302,6 +327,10 @@ def print_plan(cfg: RunConfig, info: dict[str, Any]) -> None:
           f"target_height={target if target else '-'} -> out {info.get('out_size')}"
           + (" (пропущен)" if info.get("upscale_skipped") else ""), flush=True)
     print(f"[plan] out file {info.get('out_path')}", flush=True)
+    frame = info.get("out_path")
+    if frame:
+        print(f"[plan] log {log_path(frame).as_posix()} · meta {meta_path(frame).as_posix()}",
+              flush=True)
     if info.get("batch"):
         batch = info["batch"]
         print(f"[plan] batch seeds={batch.get('seeds')} out_dir={batch.get('out_dir')} "
@@ -399,8 +428,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                              "не обязателен для моделей с Capabilities.requires_image=False — "
                              "там без него работает T2I, а пропорцию кадра задаёт --aspect")
     source.add_argument("--out", default=None, metavar="PATH",
-                        help=f"куда сохранить кадр (по умолчанию {DEFAULT_OUT}); к имени добавится "
-                             f"-s{{seed}} и -x{{factor}}")
+                        help=f"куда сохранить (по умолчанию {DEFAULT_OUT}): каталог -> кадр "
+                             f"<seed>-<steps>.png внутрь; файл *.png|jpg|jpeg|webp -> к имени "
+                             f"добавятся -<seed>-<steps> и -x{{factor}}; лог и meta лягут рядом")
     source.add_argument("--prompt-file", default=None, metavar="PATH",
                         help="взять промт из файла (prompts/*.txt) вместо встроенного в конфиг")
     source.add_argument("--config", default=None, metavar="PRESET",
@@ -485,8 +515,8 @@ def add_args(parser: argparse.ArgumentParser) -> None:
 
     logs = parser.add_argument_group("логи")
     logs.add_argument("--no-logs", dest="no_logs", action="store_true",
-                      help="не создавать подпапку с отладочным логом (по умолчанию рядом с кадром "
-                           "лежит <кадр>/run.log и <кадр>/meta.json)")
+                      help="не писать <кадр>.log (рядом с кадром останется только "
+                           "<кадр>-meta.json)")
 
 
 __all__ = ["BASE_LORA", "DEFAULT_CONFIG", "DEFAULT_OUT", "HELP", "NAME", "add_args",

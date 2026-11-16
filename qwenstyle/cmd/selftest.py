@@ -263,7 +263,7 @@ def _render_section(args: argparse.Namespace) -> tuple[Section, bool, dict[str, 
 
     saved = Path(result.out_path or out_path)
     if saved != out_path and saved.is_file():
-        # Ядро дописывает к имени `-s{seed}`; у selftest каноничное имя без тега сида
+        # Ядро дописывает к имени `-<seed>-<steps>`; у selftest каноничное имя без тегов
         # (`out/tests/selftest-<stamp>.png`), иначе путь в отчёте/acceptance не совпадал бы.
         try:
             saved.replace(out_path)

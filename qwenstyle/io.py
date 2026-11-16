@@ -1,12 +1,14 @@
 """Имена выходных файлов и атомарное сохранение PNG (шаг 7 плана `qwenstyle-framework`).
 
-Правила взяты из `run_style.py`/`tools/batch_seeds.py` дословно (AGENTS.md, инвариант 3):
+Правила:
 
-* одиночный прогон: `--out` + `-x{factor}` (только при факторе > 0) + `-s{seed}`;
-  `out/x.png` + seed 777 + factor 4 -> `out/x-x4-s777.png`. Теги **не дублируются**, если они
-  уже есть в имени: `out/x-x4-s777.png` остаётся собой (повторный прогон того же кадра —
-  одна и та же запись, а не `x-x4-s777-x4-s777`);
-* батч: `<out-dir>/s{N}-gen.png` (чистая генерация) и `<out-dir>/s{N}.png` (после апскейла);
+* имя кадра = `<seed>-<steps>` (без префикса `s`), поэтому seed и число шагов видны прямо
+  в имени, а смена `--steps` не перезаписывает прежний кадр: `84-25.png`, `84-25-gen.png`;
+* одиночный прогон (`run`) в файл-режиме: теги `-<seed>-<steps>` (+ `-x{factor}` при апскейле)
+  дописываются к имени: `out/x.png` + seed 84 + 25 шагов -> `out/x-84-25.png`, с апскейлом
+  `out/x-84-25-x4.png`. Теги **не дублируются**, если они уже есть в имени;
+* батч/сессия: `<out-dir>/<seed>-<steps>-gen.png` (чистая генерация) и
+  `<out-dir>/<seed>-<steps>.png` (после апскейла);
 * PNG пишется **без** `pnginfo`: в файле не остаётся ни промта, ни параметров (приватность);
 * запись атомарная: `*.tmp` в том же каталоге + `os.replace()`, иначе прерванный прогон
   оставит полуфайл, который потом молча прочитается как готовый кадр.
@@ -104,9 +106,9 @@ def factor_tag(factor: float | None) -> str:
     return f"-x{value:g}"               # 4.0 -> '4', 2.5 -> '2.5', 1.6 -> '1.6'
 
 
-def seed_tag(seed: int) -> str:
-    """`-s777` — по нему кадр перезапускается один в один (смена seed не трогает кэш)."""
-    return f"-s{int(seed)}"
+def frame_stem(seed: int, steps: int) -> str:
+    """`84-25` — имя кадра: seed и число шагов через дефис (`gen` и `run`)."""
+    return f"{int(seed)}-{int(steps)}"
 
 
 def _norm(raw: str | Path) -> str:
@@ -132,49 +134,43 @@ def _insert_tags(raw: str, tags: list[str]) -> str:
 
 
 def out_path(cfg: "RunConfig", upscale_factor: float = 0.0) -> str:
-    """Имя файла одиночного прогона: `--out` + `-x{factor}` (если factor > 0) + `-s{seed}`.
+    """Имя файла одиночного прогона: `--out` + `-<seed>-<steps>` (+ `-x{factor}`).
 
     Отсутствующие теги дописываются, уже присутствующие не дублируются (идемпотентность:
-    `out/x-x4-s777.png` при seed 777 и factor 4 вернётся без изменений).
+    `out/x-84-25.png` при seed 84 и 25 шагах вернётся без изменений).
     """
     raw = _norm(getattr(cfg, "out", "") or "")
     if not raw:
         raise ValueError("out_path: в конфиге нет --out (cfg.out пустой)")
-    tags = [tag for tag in (factor_tag(upscale_factor), seed_tag(cfg.seed)) if tag]
-    missing = [tag for tag in tags if tag not in raw]
-    result = _insert_tags(raw, missing) if missing else raw
+    _head, _sep, name = _split(raw)
+    stem = frame_stem(cfg.seed, cfg.steps)
+    tags: list[str] = []
+    # идемпотентность: `20261113-8.png` и `x-20261113-8.png` уже тегированы, второй раз не надо
+    if not (name.startswith(stem) or f"-{stem}" in name):
+        tags.append(f"-{stem}")
+    factor = factor_tag(upscale_factor)
+    if factor and factor not in name:
+        tags.append(factor)
+    result = _insert_tags(raw, tags) if tags else raw
     # --out без расширения (например 'out/flux2-640') — дописываем DEFAULT_SUFFIX,
     # иначе PIL не знает формат при сохранении. Проверяем по списку известных расширений,
-    # а не по `Path.suffix`: теги вида `-s20261113`/`-x1.5` тоже дают «suffix».
+    # а не по `Path.suffix`: теги вида `-84-25`/`-x1.5` тоже дают «suffix».
     if not result.lower().endswith(IMAGE_SUFFIXES):
         result = f"{result}{DEFAULT_SUFFIX}"
     return result
 
 
-def log_dir(raw: str | Path) -> Path:
-    """Папка отладочного лога прогона: каталог кадра + имя кадра без расширения.
-
-    `out/x-s7.png` -> `out/x-s7/` (`out/x-s7/run.log` и `out/x-s7/meta.json`). Имя кадра уже
-    содержит `-s{seed}` и `-x{factor}`, поэтому у каждой генерации своя папка, а лог всегда
-    лежит рядом со своим кадром (см. `qwenstyle/runlog.py`).
-    """
-    text = _norm(raw)
-    head, sep, name = _split(text)
-    suffix = Path(name).suffix
-    stem = name[: -len(suffix)] if suffix.lower() in IMAGE_SUFFIXES else name
-    return Path(f"{head}{sep}{stem}")
-
-
-def batch_paths(out_dir: str | Path, seed: int) -> tuple[str, str]:
-    """`(gen, out)` для батча: `<out-dir>/s{N}-gen.png` и `<out-dir>/s{N}.png`.
+def batch_paths(out_dir: str | Path, seed: int, steps: int) -> tuple[str, str]:
+    """`(gen, out)` для батча: `<out-dir>/<seed>-<steps>-gen.png` и `<out-dir>/<seed>-<steps>.png`.
 
     `gen` — чистая генерация (её переиспользует апскейл и `--resume` смотрит `out`).
     Возвращаются строки (см. докстринг модуля); `Path(gen)`/`Path(out)` работают.
     """
     directory = _norm(out_dir).rstrip("/")
     base = f"{directory}/" if directory else ""
-    return (f"{base}s{int(seed)}-gen{DEFAULT_SUFFIX}",
-            f"{base}s{int(seed)}{DEFAULT_SUFFIX}")
+    stem = frame_stem(seed, steps)
+    return (f"{base}{stem}-gen{DEFAULT_SUFFIX}",
+            f"{base}{stem}{DEFAULT_SUFFIX}")
 
 
 # --------------------------------------------------------------------------- #
@@ -208,4 +204,4 @@ def save_atomic(image: "Image.Image", path: str | Path,
 
 
 __all__ = ["DEFAULT_SUFFIX", "IMAGE_SUFFIXES", "NOREF_SHA", "batch_paths", "factor_tag",
-           "image_sha", "images_sha", "log_dir", "out_path", "save_atomic", "seed_tag"]
+           "frame_stem", "image_sha", "images_sha", "out_path", "save_atomic"]

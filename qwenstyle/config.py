@@ -522,7 +522,7 @@ class UpscaleConfig:
 @dataclass(frozen=True)
 class BatchConfig:
     seeds: str = "0-9"                              # "0-9" | "1,7,42" (как tools/batch_seeds.py)
-    out_dir: str = "out/batch"                      # <out-dir>/s{N}-gen.png и <out-dir>/s{N}.png
+    out_dir: str = "out/batch"                      # <out-dir>/<seed>-<steps>[-gen].png
     keep_gen: bool = True
     resume: bool = True
 
@@ -553,14 +553,10 @@ class RunConfig:
     # Политика вытеснения устаревших эмбеддингов: none|prompt|image|pair (`qwenstyle/cleanup.py`).
     # На ключ кэша НЕ влияет: это обслуживание диска, а не параметр conditioning.
     cache_supersede: str = DEFAULT_CACHE_SUPERSEDE
-    # Отладочный лог прогона в подпапке кадра (`qwenstyle/runlog.py`). `--no-logs` -> False.
+    # Отладочный лог прогона: `<кадр>.log` рядом с кадром (`qwenstyle/runlog.py`).
+    # `--no-logs` -> False (остаётся только `<кадр>-meta.json`).
     # На кадр и на ключ кэша НЕ влияет: это наблюдение, а не параметр генерации.
     logs: bool = True
-    #: Явный каталог лога и `meta.json`; `None` — прежнее поведение (`<кадр>` у `run`,
-    #: `_logs/<stamp>` у `run_batch`). Задаёт `gen` (`out/<имя>/gen-YYYYMMDD-HHMM/`), чтобы
-    #: `run.log` и `meta.json` лежали в корне сессии, а не в подпапке кадра.
-    #: На кадр и на ключ кэша не влияет — только на раскладку файлов наблюдения.
-    log_dir: str | None = None
 
     def __post_init__(self) -> None:
         """Синхронизировать `input` (алиас) и `inputs` (полный список референсов).
@@ -585,6 +581,34 @@ class RunConfig:
         """`preset` (имя в qwenstyle/presets или путь к YAML) + точечные overrides."""
         cfg = _build_run_config(load_profile(name))
         return cfg.merged(**overrides) if overrides else cfg
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any], *, origin: str = "config") -> "RunConfig":
+        """Собрать конфиг из mapping: `preset` (имя/путь/mapping) + поля поверх него.
+
+        Нужен `project.yaml` (`prompts/<project>/project.yaml`): в нём `preset` — имя, путь
+        к YAML **или** inline-пресет (mapping с необязательным `extends`), а остальные ключи —
+        поля `RunConfig` (вложенно, как в пресетах, или плоско через точки).
+
+        Приоритет: данные пресета -> ключи mapping -> `_build_run_config` (там же проверка
+        неизвестных ключей). `origin` идёт в штамп `preset` для логов и на ключ кэша не влияет.
+        """
+        raw = dict(data or {})
+        preset = raw.pop("preset", None)
+        if isinstance(preset, Mapping):
+            base = load_preset_mapping(preset, origin=f"{origin}#preset")
+        elif preset is None or not str(preset).strip():
+            raise ConfigError(
+                f"{origin}: нужен preset (имя, путь к YAML или mapping с параметрами)"
+            )
+        else:
+            base = load_profile(str(preset))
+        flat = {key: value for key, value in raw.items() if "." not in key}
+        dotted = {key: value for key, value in raw.items() if "." in key}
+        merged = _deep_merge(base, flat)
+        for path, value in dotted.items():
+            _set_path(merged, path, _coerce(value))
+        return _build_run_config(merged)
 
     def merged(self, **overrides: Any) -> "RunConfig":
         """Копия с точечными правками по путям: `merged(**{"generation.steps": 8})`.
@@ -821,6 +845,34 @@ def preset_path(name_or_path: str) -> Path:
     )
 
 
+def load_preset_mapping(raw: Mapping[str, Any], *, origin: str = "preset",
+                        base_dir: Path | None = None,
+                        label: str | None = None) -> dict[str, Any]:
+    """Пресет из mapping: `extends` (имя/путь/mapping) + deep-merge, как у YAML-файлов.
+
+    Используется и `load_profile` (файл пресета), и `project.yaml` с inline-пресетом
+    (`preset: {extends: base, size_px: 960}`). `base_dir` — каталог, относительно которого
+    ищется `extends`-путь (у проекта — каталог самого yaml). `label` — штамп в поле `preset`
+    (только для логов: в ключ кэша эмбеддингов `preset` не входит).
+    """
+    if not isinstance(raw, Mapping):
+        raise ConfigError(f"{origin}: ожидался словарь параметров, получено {type(raw).__name__}")
+    data = dict(raw)
+    parent = data.pop("extends", None)
+    if parent:
+        if isinstance(parent, Mapping):
+            parent_data = load_preset_mapping(parent, origin=origin, base_dir=base_dir)
+        else:
+            path = Path(str(parent))
+            if base_dir is not None and not path.is_absolute() and (base_dir / path).is_file():
+                path = base_dir / path
+            parent_data = load_profile(str(path))
+        data = _deep_merge(parent_data, data)
+    data.pop("preset", None)            # preset всегда = текущий пресет, не родителя
+    data["preset"] = label or origin
+    return data
+
+
 def load_profile(name_or_path: str) -> dict[str, Any]:
     """Читает YAML-пресет (+ `extends:`) и возвращает словарь параметров RunConfig."""
     import yaml  # локальный импорт: конфиг должен собираться и без yaml, если пресет не нужен
@@ -830,15 +882,7 @@ def load_profile(name_or_path: str) -> dict[str, Any]:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
         raise ConfigError(f"{path}: некорректный YAML ({exc})") from exc
-    if not isinstance(raw, Mapping):
-        raise ConfigError(f"{path}: ожидался словарь параметров, получено {type(raw).__name__}")
-    data = dict(raw)
-    parent = data.pop("extends", None)
-    if parent:
-        data = _deep_merge(load_profile(str(parent)), data)
-    data.pop("preset", None)            # preset всегда = имя текущего файла, не родителя
-    data["preset"] = path.stem
-    return data
+    return load_preset_mapping(raw, origin=str(path), base_dir=path.parent, label=path.stem)
 
 
 def prompt_md5(prompt: str) -> str:
@@ -860,6 +904,6 @@ __all__ = [
     "DEFAULT_ENCODER_DEVICE", "DEFAULT_ENCODER_DTYPE", "encoder_device_canon",
     "encoder_dtype_canon", "EMBEDS_DIR", "MODELS_DIR", "CACHE_ROOT", "models_path",
     "LoraConfig", "NOREF_SHA", "RunConfig", "UpscaleConfig", "available_presets", "image_sha",
-    "load_profile", "load_prompt", "preset_path", "prompt_md5",
+    "load_preset_mapping", "load_profile", "load_prompt", "preset_path", "prompt_md5",
     "backend_parameters", "check_sampler_kwargs", "readonly_params",
 ]
