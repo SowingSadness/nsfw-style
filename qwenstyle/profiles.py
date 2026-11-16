@@ -1,4 +1,4 @@
-"""Манифесты профилей машин: `weak` / `strong` / `flagship` — данные и чистые функции.
+"""Манифесты профилей машин: `VRAM8` / `VRAM12` / `VRAM16` — данные и чистые функции.
 
 Профиль отвечает на три вопроса без единого тензора: **какие репозитории** нужны на такой машине,
 **что из этого качается** (`qwenstyle/cmd/models.py download --profile`) и **какие пресеты**
@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 #: Профили в порядке возрастания железа: этот порядок печатают подсказки об ошибке.
-PROFILE_ORDER: tuple[str, ...] = ("weak", "strong", "flagship")
+PROFILE_ORDER: tuple[str, ...] = ("VRAM8", "VRAM12", "VRAM16")
 
 
 @dataclass(frozen=True)
@@ -50,12 +50,15 @@ class ProfileRepo:
 class Profile:
     """Машина + её модели. `presets` — публичные пресеты этой машины (шаг 3)."""
 
-    name: str                 # weak | strong | flagship
+    name: str                 # VRAM8 | VRAM12 | VRAM16
     hardware: str             # "8 GB VRAM / 16 GB RAM"
     repos: tuple[ProfileRepo, ...]
     presets: tuple[str, ...]
     disk_gib: float           # полный след на диске: загрузка + fp8-кэши + апскейлер
-    target_height: int        # целевая высота кадра: 1080 | 1440 | 2160
+    #: Высота кадра, которую профиль даёт **из коробки**: у `-release` она либо native
+    #: (`upscale: null`), либо добирается ESRGAN; 2160 — только отдельными пресетами
+    #: (`VRAM16-4k-fast`, `VRAM16-r3-*`), поэтому в поле её нет.
+    target_height: int        # 1080 | 960 | 1440
 
 
 # --------------------------------------------------------------------------- #
@@ -140,11 +143,11 @@ def _models_caches(*names: str) -> float:
 # Профили
 # --------------------------------------------------------------------------- #
 
-WEAK = Profile(
-    name="weak",
+VRAM8 = Profile(
+    name="VRAM8",
     hardware="8 GB VRAM / 16 GB RAM",
     repos=(BASE_REPO, TURBO_REPO, FUSAL_REPO, HERETIC_REPO),
-    presets=("weak-preview", "weak-release", "weak-preview-anime", "weak-release-anime"),
+    presets=("VRAM8-preview", "VRAM8-release", "VRAM8-preview-anime", "VRAM8-release-anime"),
     # загрузка 61.5 + два fp8-кэша 13.4 + ESRGAN
     disk_gib=round(30.86 + 13.25 + 1.02 + 16.33
                    + _models_caches("base fp8-трансформер", "turbo fp8-трансформер",
@@ -152,31 +155,37 @@ WEAK = Profile(
     target_height=1080,
 )
 
-STRONG = Profile(
-    name="strong",
-    hardware="16 GB VRAM / 32 GB RAM",
+VRAM12 = Profile(
+    name="VRAM12",
+    hardware="12 GB VRAM / 32 GB RAM",
     repos=(BASE_REPO, FUSAL_REPO, HERETIC_REPO),
-    presets=("strong-preview", "strong-release", "strong-preview-anime", "strong-release-anime"),
+    presets=("VRAM12-preview", "VRAM12-release", "VRAM12-preview-anime", "VRAM12-release-anime"),
     # загрузка 48.2 + fp8-кэш base 6.7 + ESRGAN
     disk_gib=round(30.86 + 1.02 + 16.33
                    + _models_caches("base fp8-трансформер", "ESRGAN x4plus_anime_6B"), 1),
+    # release отдаёт native 960p (`upscale: null`); 1440 — это `--upscale 1.5`
+    target_height=960,
+)
+
+VRAM16 = Profile(
+    name="VRAM16",
+    hardware="16 GB VRAM / 64 GB RAM",
+    repos=(BASE_REPO, FUSAL_REPO, HERETIC_REPO, H3_REPO, H3_TE_REPO),
+    presets=("VRAM16-preview", "VRAM16-preview-anime", "VRAM16-release",
+             "VRAM16-release-anime", "VRAM16-4k-fast", "VRAM16-r3-169", "VRAM16-r3-43"),
+    # VRAM12 + H3-Image 63.94 + 32B-энкодер 62.14 (+ fp8-кэш H3 строится на месте)
+    disk_gib=round(30.86 + 1.02 + 16.33 + 63.94 + 62.14
+                   + _models_caches("base fp8-трансформер", "ESRGAN x4plus_anime_6B"), 1),
+    # release отдаёт native 1440p (`upscale: null`); 2160 — `VRAM16-4k-fast`/`VRAM16-r3-*`
+    # или `--upscale 1.5` у release
     target_height=1440,
 )
 
-FLAGSHIP = Profile(
-    name="flagship",
-    hardware="16 GB VRAM / 64 GB RAM",
-    repos=(BASE_REPO, FUSAL_REPO, HERETIC_REPO, H3_REPO, H3_TE_REPO),
-    presets=("flagship-preview", "flagship-preview-anime", "flagship-release",
-             "flagship-release-anime", "flagship-4k-fast"),
-    # strong + H3-Image 63.94 + 32B-энкодер 62.14 (+ fp8-кэш H3 строится на месте)
-    disk_gib=round(30.86 + 1.02 + 16.33 + 63.94 + 62.14
-                   + _models_caches("base fp8-трансформер", "ESRGAN x4plus_anime_6B"), 1),
-    target_height=2160,
-)
+#: Все профили: `VRAM8` (8 ГБ VRAM) -> `VRAM12` (12 ГБ) -> `VRAM16` (16 ГБ + 64 ГБ RAM).
+PROFILES: dict[str, Profile] = {item.name: item for item in (VRAM8, VRAM12, VRAM16)}
 
-#: Все профили: `weak` (8 ГБ VRAM) -> `strong` (16 ГБ) -> `flagship` (16 ГБ + 64 ГБ RAM).
-PROFILES: dict[str, Profile] = {item.name: item for item in (WEAK, STRONG, FLAGSHIP)}
+#: Поиск по имени без учёта регистра (`VRAM12`, `vram12` и `Vram12` — один профиль).
+_PROFILE_KEYS: dict[str, Profile] = {name.lower(): item for name, item in PROFILES.items()}
 
 
 # --------------------------------------------------------------------------- #
@@ -184,14 +193,14 @@ PROFILES: dict[str, Profile] = {item.name: item for item in (WEAK, STRONG, FLAGS
 # --------------------------------------------------------------------------- #
 
 def names() -> tuple[str, ...]:
-    """Имена профилей в порядке возрастания железа (`weak`, `strong`, `flagship`)."""
+    """Имена профилей в порядке возрастания железа (`VRAM8`, `VRAM12`, `VRAM16`)."""
     return PROFILE_ORDER
 
 
 def profile(name: str) -> Profile:
-    """Профиль по имени; неизвестное имя — `ValueError` со списком доступных."""
+    """Профиль по имени (регистр не важен); неизвестное имя — `ValueError` со списком доступных."""
     key = str(name or "").strip().lower()
-    found = PROFILES.get(key)
+    found = _PROFILE_KEYS.get(key)
     if found is None:
         raise ValueError(f"неизвестный профиль {name!r}; доступны: {', '.join(PROFILE_ORDER)}")
     return found
@@ -239,8 +248,8 @@ def local_dir_candidates(local_dir: str | None) -> tuple[Path, ...]:
 
 
 __all__ = [
-    "BASE_REPO", "FUSAL_REPO", "FLAGSHIP", "H3_REPO", "H3_TE_REPO", "HERETIC_REPO",
-    "PROFILES", "PROFILE_ORDER", "REPO_SIZE_GIB", "STRONG", "TURBO_REPO", "WEAK",
+    "BASE_REPO", "FUSAL_REPO", "H3_REPO", "H3_TE_REPO", "HERETIC_REPO",
+    "PROFILES", "PROFILE_ORDER", "REPO_SIZE_GIB", "TURBO_REPO", "VRAM8", "VRAM12", "VRAM16",
     "Profile", "ProfileRepo", "disk_estimate", "download_estimate", "local_dir_candidates",
     "names", "profile", "repo_size_gib",
 ]

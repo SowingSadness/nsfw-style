@@ -11,7 +11,7 @@
 * `models download <repo>` — **по умолчанию только план**: список файлов с размерами, итог в GiB,
   свободное место на диске и требуемый `--yes`; ничего не скачивается. `--dry-run` — тот же план,
   `--yes` — `snapshot_download` с `allow_patterns` из `--include` (без `assets/` и `*.gguf`).
-* `models download --profile <weak|strong|flagship>` — то же по манифесту профиля
+* `models download --profile <VRAM8|VRAM12|VRAM16>` — то же по манифесту профиля
   (`qwenstyle/profiles.py`): таблица `repo → компоненты → ГиБ → лицензия → gated`, суммарный план,
   `--yes` в цикле по репозиториям.
 * `models download --profile … --probe` — **безопасная проверка доступа**: по каждому репозиторию
@@ -61,7 +61,7 @@ from ..registry import KINDS, discover, generation_for_repo
 
 NAME = "models"
 HELP = ("зарегистрированные бекенды (list), зондирование репозитория без скачивания (probe) "
-        "и план/скачивание весов по явному --yes (download, в т.ч. --profile weak|strong|flagship)")
+        "и план/скачивание весов по явному --yes (download, в т.ч. --profile VRAM8|VRAM12|VRAM16)")
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _KIND_TITLES = {
@@ -726,7 +726,7 @@ def _cmd_download(args: argparse.Namespace) -> int:
         return _cmd_download_profile(args, prof)
     if not repo:
         print("[download] нужен REPO или --profile <name>")
-        print("  например: python -m qwenstyle models download --profile strong --dry-run")
+        print("  например: python -m qwenstyle models download --profile VRAM12 --dry-run")
         print("  профили: " + ", ".join(PROFILE_ORDER))
         return 2
     offline = bool(getattr(args, "offline", False)) or _env_offline()
@@ -1059,7 +1059,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
         description="По умолчанию (и с --dry-run) печатает список файлов с размерами, итог в GiB "
                     "и свободное место; ничего не скачивает. С --yes вызывает snapshot_download "
                     "с allow_patterns по --include и требует сети (HF_HUB_OFFLINE=0). "
-                    "--profile weak|strong|flagship заменяет REPO манифестом профиля "
+                    "--profile VRAM8|VRAM12|VRAM16 заменяет REPO манифестом профиля "
                     "(repo → компоненты → ГиБ → лицензия → gated); --probe безопасно проверяет "
                     "доступ, скачивая по одному самому маленькому файлу на репозиторий.",
         prog=f"{parser.prog} download",
@@ -1068,7 +1068,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                               help="репозиторий модели, например Qwen/Qwen-Image-2.1 "
                                    "(вместе с --profile не указывается)")
     download_cmd.add_argument("--profile", metavar="NAME",
-                              help="профиль машины: weak | strong | flagship — набор репозиториев "
+                              help="профиль машины: VRAM8 | VRAM12 | VRAM16 — набор репозиториев "
                                    "из qwenstyle/profiles.py вместо одного REPO")
     download_cmd.add_argument("--dry-run", action="store_true",
                               help="только план (то же, что и без флагов); с --yes отменяет загрузку")

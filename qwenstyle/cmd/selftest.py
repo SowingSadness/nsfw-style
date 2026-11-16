@@ -4,7 +4,7 @@
 
     [selftest] окружение   python / torch + CUDA / diffusers / transformers / pillow / psutil,
                            VRAM, RAM, диск, fp8-кэш трансформера;
-    [selftest] профиль     (только с `--profile weak|strong|flagship`) наличие репозиториев
+    [selftest] профиль     (только с `--profile VRAM8|VRAM12|VRAM16`) наличие репозиториев
                            манифеста (`qwenstyle/profiles.py`) и пресетов профиля;
     [selftest] рендер      480p / 4 шага на **синтетической картинке**, собранной в памяти
                            (градиент + фигуры, 768×768), промт — `tests/texts/exp3.txt`.
@@ -128,7 +128,7 @@ def _env_section() -> Section:
     ram_ok = hw.ram_total_gib is None or hw.ram_total_gib >= 16.0
     section.add("vram", "OK" if vram_ok else "WARN", hw.summary())
     if not vram_ok:
-        section.rows[-1].detail += " (меньше 8 GiB — берите профиль weak)"
+        section.rows[-1].detail += " (меньше 8 GiB — берите профиль VRAM8)"
     if not ram_ok:
         section.rows[-1].detail += " (меньше 16 GiB RAM)"
 
@@ -401,7 +401,7 @@ def run(args: argparse.Namespace) -> int:
         _print_sections(sections)
         if missing:
             hint = ("python -m qwenstyle models download --profile "
-                    f"{profile_name or 'strong'} --yes")
+                    f"{profile_name or 'VRAM12'} --yes")
             print(f"[selftest] не хватает весов ({len(missing)}): {', '.join(missing)}")
             print(f"  скачать: {hint}")
         print(f"[selftest] {'PASS' if payload['ok'] else 'FAIL'} за {payload['wall_s']} s")

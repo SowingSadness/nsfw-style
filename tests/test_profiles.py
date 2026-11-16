@@ -1,4 +1,4 @@
-"""Публичные пресеты (13) и метка профиля (`model_label`): без GPU, весов и сети.
+"""Публичные пресеты (15) и метка профиля (`model_label`): без GPU, весов и сети.
 
 Запуск: `PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe tests/test_profiles.py`
 Успех: `PASS` по каждому кейсу, `ALL PASS` и exit 0; провал: `FAIL <кейс>: ...` и exit 1.
@@ -7,9 +7,9 @@
 `models download --profile` (`qwenstyle/profiles.py`). Ошибка в ней не падает: она просто
 обещает пользователю не тот кадр (1080p на 8 ГБ VRAM или 4K на 16 ГБ RAM). Тест фиксирует:
 
-1. **13 публичных пресетов резолвятся** и совпадают с манифестами профилей (`PROFILES`);
+1. **15 публичных пресетов резолвятся** и совпадают с манифестами профилей (`PROFILES`);
 2. **числа матрицы**: `size_px`, `steps`, `offload`, LoRA 0/0.7, `target_height`
-   (weak → 1080, strong → 1440, flagship → 2160), апскейл/энкодер/кеш точности;
+   (VRAM8 → 1080 апскейлом, VRAM12 → 960 нативно, VRAM16 → 1440 нативно), апскейл/энкодер/кеш;
 3. публичные пресеты не тянут dev-опции (`seedvr2`, `flux2`) и не смотрят в легаси-кеш;
 4. **метки пресетов по семейству модели** (старый баг: `preview` — FLUX.2, но считался `base`);
 5. ключевые dev-пресеты живы и резолвятся (на них опираются эксперименты, README их не обещает).
@@ -36,25 +36,29 @@ from qwenstyle.config import (                      # noqa: E402
 from qwenstyle.profiles import PROFILE_ORDER, PROFILES   # noqa: E402
 
 #: Публичная матрица: пресет -> (size_px, steps, lora, offload, target_height).
-#: Источник — план публикации (13 пресетов), а не вывод кода: тест ловит расхождение с ним.
+#: Источник — план публикации (15 пресетов), а не вывод кода: тест ловит расхождение с ним.
+#: `target_height` 0 = апскейла нет: у `VRAM12-release`/`VRAM16-release` это `upscale: null`
+#: (кадр отдаётся native), у черновиков — просто выключенный ESRGAN.
 MATRIX: dict[str, tuple[int, int, float, str, int]] = {
-    "weak-preview":        (480,  8, 0.0, "group", 0),
-    "weak-release":        (640,  8, 0.0, "group", 1080),
-    "weak-preview-anime":  (480,  8, 0.7, "group", 0),
-    "weak-release-anime":  (640, 25, 0.7, "group", 1080),
-    "strong-preview":      (768,  8, 0.0, "none", 0),
-    "strong-release":      (960, 25, 0.0, "group", 1440),
-    "strong-preview-anime": (768, 8, 0.7, "none", 0),
-    "strong-release-anime": (960, 25, 0.7, "group", 1440),
-    "flagship-preview":    (768,  8, 0.0, "none", 0),
-    "flagship-preview-anime": (768, 8, 0.7, "none", 0),
-    "flagship-release":    (1440, 25, 0.0, "group", 2160),
-    "flagship-release-anime": (1440, 25, 0.7, "group", 2160),
-    "flagship-4k-fast":    (1088, 25, 0.0, "group", 2160),
+    "VRAM8-preview":         (480,  8, 0.0, "group", 0),
+    "VRAM8-release":         (640,  8, 0.0, "group", 1080),
+    "VRAM8-preview-anime":   (480,  8, 0.7, "group", 0),
+    "VRAM8-release-anime":   (640, 25, 0.7, "group", 1080),
+    "VRAM12-preview":        (768,  8, 0.0, "group", 0),
+    "VRAM12-release":        (960, 25, 0.0, "group", 0),
+    "VRAM12-preview-anime":  (768,  8, 0.7, "group", 0),
+    "VRAM12-release-anime":  (960, 25, 0.7, "group", 0),
+    "VRAM16-preview":        (768,  8, 0.0, "none", 0),
+    "VRAM16-preview-anime":  (768,  8, 0.7, "none", 0),
+    "VRAM16-release":        (1440, 25, 0.0, "group", 0),
+    "VRAM16-release-anime":  (1440, 25, 0.7, "group", 0),
+    "VRAM16-4k-fast":        (1088, 25, 0.0, "group", 2160),
+    "VRAM16-r3-169":         (912, 25, 0.0, "group", 2160),
+    "VRAM16-r3-43":          (1056, 25, 0.0, "group", 2160),
 }
 
-#: Целевая высота кадра у профиля: именно её обещает README (1080p / 1440p / 4K UHD).
-PROFILE_TARGET_HEIGHT = {"weak": 1080, "strong": 1440, "flagship": 2160}
+#: Целевая высота кадра у профиля: именно её обещает README (1080p / 960p / 1440p).
+PROFILE_TARGET_HEIGHT = {"VRAM8": 1080, "VRAM12": 960, "VRAM16": 1440}
 
 #: Жёстко зафиксированные ожидания метки там, где ошибка уже случалась.
 EXPECTED_LABELS = {
@@ -65,14 +69,14 @@ EXPECTED_LABELS = {
 
 #: Dev-пресеты, на которые опираются эксперименты/README разработчика (публичными не являются).
 #: FLUX.2-пресеты удалены вместе с остальными dev-надстройками; бекенд `flux2` остался в коде.
-DEV_PRESETS = ("base", "turbo", "h3-image", "flagship-r3-169", "flagship-r3-43")
+DEV_PRESETS = ("base", "turbo", "h3-image")
 
 #: Dev-опции, которых в публичных пресетах быть не должно (план публикации, решения 4 и 12).
 DEV_ONLY_BACKENDS = ("seedvr2", "flux2")
 
 
 def public_presets() -> list[str]:
-    """13 публичных пресетов в порядке профилей — как их печатает `gen`/`models download`."""
+    """15 публичных пресетов в порядке профилей — как их печатает `gen`/`models download`."""
     names: list[str] = []
     for profile_name in PROFILE_ORDER:
         names.extend(PROFILES[profile_name].presets)
@@ -90,10 +94,10 @@ def _lora_scale(cfg: RunConfig) -> float:
 # --------------------------------------------------------------------------- #
 
 def case_public_presets_resolve() -> None:
-    """1. Все 13 публичных пресетов из манифестов профилей существуют и резолвятся."""
+    """1. Все 15 публичных пресетов из манифестов профилей существуют и резолвятся."""
     names = public_presets()
-    if len(names) != 13:
-        raise AssertionError(f"публичных пресетов {len(names)}, в плане 13: {names}")
+    if len(names) != 15:
+        raise AssertionError(f"публичных пресетов {len(names)}, в плане 15: {names}")
     if len(set(names)) != len(names):
         raise AssertionError(f"пресет продублирован в профилях: {names}")
     if sorted(names) != sorted(MATRIX):
@@ -106,7 +110,7 @@ def case_public_presets_resolve() -> None:
         raise AssertionError(f"нет файлов qwenstyle/presets для {missing}")
     for name in names:
         RunConfig.from_profile(name)                       # не резолвится — исключение и FAIL
-    print(f"  ok: 13 публичных пресетов резолвятся, профилей {len(PROFILE_ORDER)}")
+    print(f"  ok: 15 публичных пресетов резолвятся, профилей {len(PROFILE_ORDER)}")
 
 
 def case_matrix() -> None:
@@ -134,8 +138,8 @@ def case_matrix() -> None:
 
 
 def case_profiles_matrix() -> None:
-    """3. Профили: 4/4/5 пресетов, целевая высота 1080/1440/2160, релизы её держат."""
-    expected_counts = {"weak": 4, "strong": 4, "flagship": 5}
+    """3. Профили: 4/4/7 пресетов, целевая высота 1080/960/1440, релизы её держат."""
+    expected_counts = {"VRAM8": 4, "VRAM12": 4, "VRAM16": 7}
     for profile_name in PROFILE_ORDER:
         profile = PROFILES[profile_name]
         count = len(profile.presets)
@@ -149,15 +153,17 @@ def case_profiles_matrix() -> None:
         for preset in profile.presets:
             cfg = RunConfig.from_profile(preset)
             if "release" not in preset:
-                continue                            # preview — черновик, апскейла не обещает
-            if not cfg.upscale.target_height:
-                raise AssertionError(f"{preset}: релиз профиля {profile_name} без апскейла")
-            if int(cfg.upscale.target_height) != target:
-                raise AssertionError(f"{preset}: target_height={cfg.upscale.target_height}, "
-                                     f"у профиля {profile_name} {target}")
+                continue                            # preview — черновик, высоты не обещает
+            # Высоту профиля даёт либо native-кадр (у VRAM12/VRAM16-release — `upscale: null`),
+            # либо апскейл из меньшего рендера (VRAM8-release: 640p -> 1080p).
+            native = int(cfg.size_px or 0)
+            upscaled = int(cfg.upscale.target_height or 0)
+            if target not in (native, upscaled):
+                raise AssertionError(f"{preset}: native {native} и target_height {upscaled} — "
+                                     f"ни одно не равно высоте профиля {profile_name} ({target})")
         if profile.disk_gib <= 0 or not profile.repos:
             raise AssertionError(f"профиль {profile_name}: пустой манифест ({profile})")
-    print("  ok: weak 4/1080, strong 4/1440, flagship 5/2160 — релизы целятся в высоту профиля")
+    print("  ok: VRAM8 4/1080 (апскейл), VRAM12 4/960 (native), VRAM16 7/1440 (native)")
 
 
 def case_public_stays_public() -> None:
@@ -177,7 +183,7 @@ def case_public_stays_public() -> None:
     # Кеши разделены: файлы эмбеддингов живут в cache/embeds, а не в корне cache/
     if EMBEDS_DIR.parent.name != "cache" or EMBEDS_DIR.name != "embeds":
         raise AssertionError(f"EMBEDS_DIR={EMBEDS_DIR!r} — ожидался cache/embeds")
-    print("  ok: 13 пресетов без seedvr2/flux2, fp8-кеш в cache/models, эмбеддинги в cache/embeds")
+    print("  ok: 15 пресетов без seedvr2/flux2, fp8-кеш в cache/models, эмбеддинги в cache/embeds")
 
 
 def case_labels() -> None:
@@ -206,11 +212,11 @@ def case_labels() -> None:
           f"({', '.join(base_labels)})")
 
     # Метка не зависит от размера/шагов/апскейла: публичный флагманский пресет — всё ещё `base`.
-    if model_label(RunConfig.from_profile("flagship-4k-fast")) != "base":
-        raise AssertionError("flagship-4k-fast (Qwen + FUSAL R80) обязан остаться base")
-    if model_label(RunConfig.from_profile("weak-preview")) == "base":
-        raise AssertionError("weak-preview идёт на Turbo-трансформере и не может быть base")
-    print("  ok: flagship-4k-fast = base, weak-preview = свой профиль")
+    if model_label(RunConfig.from_profile("VRAM16-4k-fast")) != "base":
+        raise AssertionError("VRAM16-4k-fast (Qwen + FUSAL R80) обязан остаться base")
+    if model_label(RunConfig.from_profile("VRAM8-preview")) == "base":
+        raise AssertionError("VRAM8-preview идёт на Turbo-трансформере и не может быть base")
+    print("  ok: VRAM16-4k-fast = base, VRAM8-preview = свой профиль")
 
 
 def case_dev_presets() -> None:
@@ -247,7 +253,7 @@ def _expected_label(cfg: RunConfig, name: str) -> str:
 
 
 CASES = (
-    ("1. 13 публичных пресетов резолвятся", case_public_presets_resolve),
+    ("1. 15 публичных пресетов резолвятся", case_public_presets_resolve),
     ("2. числа публичной матрицы", case_matrix),
     ("3. профили: состав и целевая высота", case_profiles_matrix),
     ("4. публичные пресеты без dev-опций", case_public_stays_public),

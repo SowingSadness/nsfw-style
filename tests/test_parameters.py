@@ -51,7 +51,7 @@ EXPECTED = {
 TYPES = ("int", "float", "bool", "str", "enum")
 SCOPES = ("generation", "sampler", "encoder", "upscale")
 #: Пресеты для проверки таблицы/валидации (публичный минимум и H3 с readonly-шагами).
-PRESET_QWEN = "strong-release"
+PRESET_QWEN = "VRAM12-release"
 PRESET_H3 = "h3-image"
 
 

@@ -24,7 +24,7 @@
     --offload-blocks N         -> generation.sampler_kwargs.offload_blocks
     --offload-stream 0|1       -> generation.sampler_kwargs.offload_stream
     --prompt-file PATH         -> prompt_file
-    --upscale F                -> upscale.factor
+    --upscale F                -> upscale.factor   (F=null|none|off -> upscale: null, без апскейла)
     --upscale-backend NAME     -> upscale.backend
     --upscale-weights PATH     -> upscale.weights
     --upscale-tile N           -> upscale.tile
@@ -41,7 +41,7 @@
 
 Новое (не было в `run_style.py`):
 
-    --config PRESET|PATH       -> пресет `qwenstyle/presets/*.yaml` (base/turbo/preview/flux2/…)
+    --config PRESET|PATH       -> пресет `qwenstyle/presets/*.yaml` (base/turbo/VRAM8-*/VRAM12-*/…)
     --set KEY=VALUE            -> точечный параметр RunConfig (повторяемый)
     --dry-run                  -> печать плана (crop, ключ кэша, нужен ли энкодер, шаги, фактор)
                                   без загрузки весов; exit 0
@@ -65,7 +65,7 @@
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --preview \\
         --input out/canyon-edit-640-lora1.0-s777.png --prompt-file prompts/exp3.txt \\
         --out out/p.png
-    .venv/Scripts/python.exe -m qwenstyle run --dry-run --config preview --steps 8 \\
+    .venv/Scripts/python.exe -m qwenstyle run --dry-run --config VRAM16-preview --steps 8 \\
         --input out/canyon-edit-640-lora1.0-s777.png --prompt-file prompts/exp3.txt --out out/p.png
 """
 from __future__ import annotations
@@ -86,6 +86,7 @@ from ..config import (
     readonly_params,
 )
 from . import parse_sets
+from ._args import UPSCALE_HELP, parse_upscale
 
 NAME = "run"
 HELP = "одиночный кадр: все флаги run_style.py + --config/--set/--dry-run"
@@ -140,7 +141,7 @@ def model_label(cfg: RunConfig) -> str:
 
     Возвращает `base`, если прогон идёт на **той же** модели, что и профиль по умолчанию
     (Qwen-Image-2.1 + FUSAL R80): другой размер/шаги/апскейл — это всё ещё `base`, поэтому
-    `strong-release`, `flagship-4k-fast`, `flagship-r3-169` печатаются как `base`.
+    `VRAM12-release`, `VRAM16-4k-fast`, `VRAM16-r3-169` печатаются как `base`.
     Всё остальное возвращается именем пресета: `turbo` (другой трансформер), а также не-qwen бекенды.
 
     Решается по конфигу, а не списком имён: новый пресет на базовой модели получает `base`
@@ -223,7 +224,11 @@ def build_config(args: argparse.Namespace) -> RunConfig:
 
     # постобработка
     if getattr(args, "upscale", None) is not None:
-        overrides["upscale.factor"] = float(args.upscale)
+        value = parse_upscale(args.upscale)          # мусор -> ValueError (exit 2 в `run()`)
+        if value is None:
+            overrides["upscale"] = None              # пустой блок = апскейл выключен целиком
+        else:
+            overrides["upscale.factor"] = float(value)
     if getattr(args, "upscale_backend", None) is not None:
         overrides["upscale.backend"] = str(args.upscale_backend)
     if getattr(args, "upscale_weights", None) is not None:
@@ -294,7 +299,8 @@ def print_plan(cfg: RunConfig, info: dict[str, Any]) -> None:
     print(f"[plan] cache file {info.get('embeds_path')} (dir {info.get('cache_dir')})", flush=True)
     target = info.get("upscale_target_height")
     print(f"[plan] upscale {info.get('upscale_backend')} factor={float(info.get('upscale_factor') or 0):g} "
-          f"target_height={target if target else '-'} -> out {info.get('out_size')}", flush=True)
+          f"target_height={target if target else '-'} -> out {info.get('out_size')}"
+          + (" (пропущен)" if info.get("upscale_skipped") else ""), flush=True)
     print(f"[plan] out file {info.get('out_path')}", flush=True)
     if info.get("batch"):
         batch = info["batch"]
@@ -444,9 +450,8 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                         help="1 = асинхронная префетч-стрим загрузки блоков (по умолчанию 1)")
 
     upscale = parser.add_argument_group("постобработка (после выгрузки пайплайна)")
-    upscale.add_argument("--upscale", type=float, default=None, metavar="F",
-                         help="множитель апскейла: 0 = выкл, 2/3/4 или дробный (1.2 -> 640p в 768p); "
-                              "seedvr2 x4 = OOM на 16 ГБ; по умолчанию из пресета (0 = выкл)")
+    upscale.add_argument("--upscale", type=str, default=None, metavar="F|null",
+                         help=UPSCALE_HELP)
     upscale.add_argument("--upscale-backend", choices=("esrgan", "seedvr2"), default=None,
                          help="esrgan = Real-ESRGAN anime6B (по умолчанию); seedvr2 = SeedVR2-3B "
                               "(отдельное окружение seedvr2/)")

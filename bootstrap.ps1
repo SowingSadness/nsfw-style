@@ -11,14 +11,14 @@
     Profile repository lists live in qwenstyle/profiles.py only - this script never duplicates them.
 
 .EXAMPLE
-    cmd /c bootstrap.cmd -Profile strong -DryRun
-    cmd /c bootstrap.cmd -Profile strong -Check
-    cmd /c bootstrap.cmd -Profile strong -SkipModels
+    cmd /c bootstrap.cmd -Profile VRAM12 -DryRun
+    cmd /c bootstrap.cmd -Profile VRAM12 -Check
+    cmd /c bootstrap.cmd -Profile VRAM12 -SkipModels
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('weak', 'strong', 'flagship')]
-    [string]$Profile = 'strong',
+    [ValidateSet('VRAM8', 'VRAM12', 'VRAM16')]
+    [string]$Profile = 'VRAM12',
     [switch]$DryRun,
     [switch]$Check,
     [switch]$SkipModels,

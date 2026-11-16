@@ -14,7 +14,7 @@ export PYTHONIOENCODING=utf-8
 
 TOTAL=9
 STEP=0
-PROFILE="strong"
+PROFILE="VRAM12"
 DRY_RUN=0
 CHECK=0
 SKIP_MODELS=0
@@ -24,13 +24,13 @@ usage() {
     cat <<'EOF'
 qwenstyle bootstrap - one command to a working install (Linux / macOS)
 
-usage: ./bootstrap.sh [weak|strong|flagship] [--profile weak|strong|flagship]
+usage: ./bootstrap.sh [VRAM8|VRAM12|VRAM16] [--profile VRAM8|VRAM12|VRAM16]
                       [--dry-run] [--check] [--skip-models] [--no-venv]
 
-  weak|strong|flagship  machine profile as the first positional argument
+  VRAM8|VRAM12|VRAM16  machine profile as the first positional argument
                         (same as --profile NAME)
-  --profile NAME  machine profile: weak (8 GB VRAM), strong (16 GB, default),
-                  flagship (16 GB VRAM + 64 GB RAM)
+  --profile NAME  machine profile: VRAM8 (8 GB VRAM), VRAM12 (12 GB, default),
+                  VRAM16 (16 GB VRAM + 64 GB RAM)
   --dry-run       print every step and the model plan; install and download nothing
   --check         setup + Hub access probe (one small file per repository), no full download
   --skip-models   do not download weights (already present / offline machine)
@@ -40,7 +40,7 @@ EOF
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        weak|strong|flagship)
+        VRAM8|VRAM12|VRAM16)
             PROFILE="$1"; shift ;;
         --profile)
             if [ $# -lt 2 ]; then usage >&2; exit 2; fi
@@ -56,8 +56,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$PROFILE" in
-    weak|strong|flagship) ;;
-    *) printf "[error] unknown profile '%s'; available: weak, strong, flagship\n" "$PROFILE" >&2; exit 2 ;;
+    VRAM8|VRAM12|VRAM16) ;;
+    *) printf "[error] unknown profile '%s'; available: VRAM8, VRAM12, VRAM16\n" "$PROFILE" >&2; exit 2 ;;
 esac
 
 # --------------------------------------------------------------------------- #

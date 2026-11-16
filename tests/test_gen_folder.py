@@ -43,8 +43,8 @@ from qwenstyle.config import RunConfig   # noqa: E402
 TESTS_DIR = Path(__file__).resolve().parent
 #: Готовый FUSAL-промт тестов (лежит в репозитории, а не в `prompts/`).
 TEST_PROMPT = TESTS_DIR / "texts" / "exp1.txt"
-#: Пресеты с разными требованиями к входу: `strong-release` требует референс, `h3-image` — нет.
-PRESET_NEEDS_IMAGE = "strong-release"
+#: Пресеты с разными требованиями к входу: `VRAM12-release` требует референс, `h3-image` — нет.
+PRESET_NEEDS_IMAGE = "VRAM12-release"
 PRESET_T2I = "h3-image"
 #: Модель qwen_image21 принимает 10 референсов (`Capabilities.max_images`).
 MAX_IMAGES = 10

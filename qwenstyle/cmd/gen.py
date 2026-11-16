@@ -7,8 +7,8 @@
         image1.png          # …image10.* — референсы (до `Capabilities.max_images`)
         image2.jpg
 
-    python -m qwenstyle gen --preset strong --prompt rainforest --seeds 84
-    python -m qwenstyle gen --preset weak-preview --prompt _demo --count 3
+    python -m qwenstyle gen --preset VRAM12 --prompt rainforest --seeds 84
+    python -m qwenstyle gen --preset VRAM8-preview --prompt _demo --count 3
 
 Сессия — `out/<имя>/gen-YYYYMMDD-HHMM/` (+`-2`, `-3` при коллизии минуты), в её **корне**:
 
@@ -17,9 +17,9 @@
     run.log                 # весь вывод прогона с метками времени (`qwenstyle/runlog.py`)
     meta.json               # сессия: пресет, промт, картинки с sha, сиды, тайминги, версии
 
-`--preset` принимает шорткаты (`weak`/`strong`/`flagship` = `<family>-release`,
+`--preset` принимает шорткаты (`VRAM8`/`VRAM12`/`VRAM16` = `<family>-release`,
 `<family>-preview`, `-release`, `-preview-anime`, `-release-anime`, `-anime` = `-release-anime`,
-`flagship-4k-fast`) и **точное имя любого** зарегистрированного пресета, включая dev-пресеты.
+`VRAM16-4k-fast`) и **точное имя любого** зарегистрированного пресета, включая dev-пресеты.
 `--seeds` (`"84"`, `"32-38"`, `"1,7,42"`) и `--count N` (N случайных сидов) — взаимоисключающие;
 ни одного — один случайный сид (печатается). Без картинок: если пресет требует референс —
 ошибка, иначе T2I (`noref`), а пропорцию кадра задаёт `--aspect`.
@@ -51,6 +51,7 @@ from ..config import (
 from ..profiles import PROFILE_ORDER, PROFILES
 from ..runlog import META_NAME
 from . import parse_sets
+from ._args import UPSCALE_HELP, parse_upscale
 
 NAME = "gen"
 HELP = ("сессия кадров из папки промта: prompts/<имя>/prompt.txt + image*, "
@@ -73,7 +74,7 @@ SEED_MAX = 2 ** 31 - 1
 # --------------------------------------------------------------------------- #
 
 def public_presets() -> tuple[str, ...]:
-    """13 публичных пресетов в порядке профилей (`weak` -> `strong` -> `flagship`).
+    """15 публичных пресетов в порядке профилей (`VRAM8` -> `VRAM12` -> `VRAM16`).
 
     Источник — манифесты `qwenstyle/profiles.py`, поэтому список не расходится с
     `models download --profile` (dev-пресеты сюда не попадают и не рекламируются).
@@ -88,7 +89,7 @@ def public_presets() -> tuple[str, ...]:
 
 def preset_aliases() -> dict[str, str]:
     """Шорткаты: `<family>` -> `<family>-release`, `<family>-anime` -> `-release-anime`."""
-    aliases: dict[str, str] = {"flagship-4k-fast": "flagship-4k-fast"}
+    aliases: dict[str, str] = {"VRAM16-4k-fast": "VRAM16-4k-fast"}
     for family in PROFILE_ORDER:
         aliases[family] = f"{family}-release"
         for suffix in ("preview", "release", "preview-anime", "release-anime"):
@@ -112,9 +113,9 @@ def resolve_preset(raw: str) -> str:
         return alias
     raise ConfigError(
         f"--preset {raw!r} не найден. Публичные пресеты: {', '.join(public_presets())}. "
-        f"Шорткаты: weak|strong|flagship (== <family>-release), "
+        f"Шорткаты: VRAM8|VRAM12|VRAM16 (== <family>-release), "
         f"<family>-preview|-release|-preview-anime|-release-anime|-anime (== -release-anime), "
-        f"flagship-4k-fast. Принимается и точное имя любого зарегистрированного пресета: "
+        f"VRAM16-4k-fast. Принимается и точное имя любого зарегистрированного пресета: "
         f"{', '.join(registered)}"
     )
 
@@ -122,7 +123,7 @@ def resolve_preset(raw: str) -> str:
 def preset_hint() -> str:
     """Строка для ошибки «нет --preset»: что вообще можно передать."""
     return (f"укажите --preset: {', '.join(public_presets())} "
-            f"(или шорткат weak|strong|flagship = <family>-release)")
+            f"(или шорткат VRAM8|VRAM12|VRAM16 = <family>-release)")
 
 
 # --------------------------------------------------------------------------- #
@@ -288,6 +289,12 @@ def build_config(args: argparse.Namespace, *, preset: str, prompt_file: Path,
     })
     if getattr(args, "aspect", None):
         overrides["aspect"] = str(args.aspect)
+    if getattr(args, "upscale", None) is not None:
+        value = parse_upscale(args.upscale)          # мусор -> ValueError (exit 2 в `run()`)
+        if value is None:
+            overrides["upscale"] = None              # пустой блок = апскейл выключен целиком
+        else:
+            overrides["upscale.factor"] = float(value)
     if getattr(args, "no_logs", False):
         overrides["logs"] = False
     cfg = RunConfig.from_profile(preset, **overrides)
@@ -311,7 +318,7 @@ def apply_image_limit(cfg: RunConfig, images: list[Path], preset: str,
 
     Повторяет правило `pipeline._plan` (первое место, знающее caps), но здесь — **до** плана,
     чтобы сообщение говорило о пресете и настоящих именах файлов:
-    `[gen] картинок 12, пресет strong-release поддерживает 10 — взяты image1..image10 …`.
+    `[gen] картинок 12, пресет VRAM12-release поддерживает 10 — взяты image1..image10 …`.
     """
     limit = getattr(caps, "max_images", None)
     if not limit or len(images) <= int(limit):
@@ -522,7 +529,7 @@ def run(args: argparse.Namespace) -> int:
                            seeds=seeds, session=session)
         caps = backend_caps(cfg)
         cfg, images = apply_image_limit(cfg, images, preset, caps)
-    except ConfigError as exc:
+    except (ConfigError, ValueError) as exc:         # ValueError — от --upscale (мусор/пусто)
         print(f"[gen] {exc}", file=sys.stderr, flush=True)
         return 2
 
@@ -577,8 +584,8 @@ def run(args: argparse.Namespace) -> int:
 def add_args(parser: argparse.ArgumentParser) -> None:
     source = parser.add_argument_group("что и чем генерировать")
     source.add_argument("--preset", default=None, metavar="PRESET",
-                        help="weak|strong|flagship (== <family>-release), <family>-preview|"
-                             "-release|-preview-anime|-release-anime|-anime, flagship-4k-fast "
+                        help="VRAM8|VRAM12|VRAM16 (== <family>-release), <family>-preview|"
+                             "-release|-preview-anime|-release-anime|-anime, VRAM16-4k-fast "
                              "или точное имя любого пресета из qwenstyle/presets/")
     source.add_argument("--prompt", default=None, metavar="NAME",
                         help=f"папка промта {PROMPT_ROOT}/NAME/: {PROMPT_FILE} (текст) + "
@@ -589,6 +596,8 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     source.add_argument("--set", dest="sets", action="append", default=[], metavar="KEY=VALUE",
                         help="точечный параметр RunConfig, например generation.steps=8 "
                              "(можно повторять)")
+    source.add_argument("--upscale", type=str, default=None, metavar="F|null",
+                        help=UPSCALE_HELP)
 
     seeds = parser.add_argument_group("сколько кадров")
     seeds.add_argument("--seeds", default=None, metavar="SPEC",

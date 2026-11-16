@@ -275,7 +275,7 @@ class EsrganBackend:
             ParameterSpec("factor", "upscale", "float", 0.0, minimum=0.0, maximum=4.0,
                           doc="множитель; 0 = выключено; target_height главнее factor"),
             ParameterSpec("target_height", "upscale", "int", None, minimum=0,
-                          doc="целевая высота кадра: factor считается из неё (1440 для strong)"),
+                          doc="целевая высота кадра: factor считается из неё (например 1440 у VRAM16)"),
             ParameterSpec("tile", "upscale", "int", DEFAULT_TILE, minimum=64, maximum=1024,
                           doc="размер тайла (только esrgan; 256/pad 32 — бит-в-бит)"),
             ParameterSpec("pad", "upscale", "int", DEFAULT_PAD, minimum=0, maximum=128,

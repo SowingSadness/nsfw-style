@@ -174,9 +174,10 @@ def case_pin_policy() -> None:
     # Публичные пресеты машины (qwenstyle/profiles.py) и fact-check: какие из них `offload: group`.
     public = [name for profile in PROFILES.values() for name in profile.presets]
     expected_group = (
-        "weak-preview", "weak-release", "weak-preview-anime", "weak-release-anime",
-        "strong-release", "strong-release-anime",
-        "flagship-release", "flagship-release-anime", "flagship-4k-fast",
+        "VRAM8-preview", "VRAM8-release", "VRAM8-preview-anime", "VRAM8-release-anime",
+        "VRAM12-preview", "VRAM12-release", "VRAM12-preview-anime", "VRAM12-release-anime",
+        "VRAM16-release", "VRAM16-release-anime", "VRAM16-4k-fast",
+        "VRAM16-r3-169", "VRAM16-r3-43",
     )
     group = tuple(name for name in public
                   if RunConfig.from_profile(name).generation.offload == "group")
@@ -190,7 +191,7 @@ def case_pin_policy() -> None:
             raise AssertionError(f"{name}: offload=group не должен выключать pin")
     print(f"  ok: {len(group)} публичных пресетов с offload=group -> pin включён")
 
-    for name in ("strong-preview", "flagship-preview"):
+    for name in ("VRAM16-preview", "VRAM16-preview-anime"):
         cfg = RunConfig.from_profile(name)
         if cfg.generation.offload == "group":
             raise AssertionError(f"{name}: ожидался offload без группы, получено {cfg.generation.offload!r}")
@@ -199,14 +200,14 @@ def case_pin_policy() -> None:
     print("  ok: без group-offload pin включён (offload его не касается)")
 
     # Выключает только явный флаг — и на group-, и на не-group-пресете.
-    for name in ("flagship-release-anime", "strong-preview"):
+    for name in ("VRAM16-release-anime", "VRAM16-preview"):
         off = RunConfig.from_profile(name).merged(**{"encoder.pin_memory": "0"})
         if off.encoder_pin_memory:
             raise AssertionError(f"{name}: --set encoder.pin_memory=0 не выключил pin")
     print("  ok: выключает только явный encoder.pin_memory=0")
 
     # Правило не следует за offload: включение группы у не-group пресета pin не трогает.
-    for name in ("strong-preview", "flagship-preview"):
+    for name in ("VRAM16-preview", "VRAM16-preview-anime"):
         grp = RunConfig.from_profile(name).merged(**{"generation.offload": "group"})
         if grp.generation.offload != "group" or grp.encoder_pin_memory is not True:
             raise AssertionError(f"{name}: pin не должен зависеть от generation.offload")
