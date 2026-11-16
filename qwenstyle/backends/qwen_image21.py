@@ -450,6 +450,10 @@ class QwenImage21Backend:
         # а vision-токены считаются по всем картинкам сразу (`encode_prompt(image=[...])`)
         image_inputs="multi",
         max_images=10,
+        # T2I разрешён: `encode_prompt(prompt, image=None)` — штатный путь Qwen-Image-2.1,
+        # промт уходит без vision-токенов, а `image_pad_mask` у пайплайна пустой. Без референса
+        # пропорцию кадра обязан задать `--aspect` (иначе 1:1) — это проверяет `input_problem`.
+        requires_image=False,
         encoder="optional",
         fixed_steps=None,                 # turbo 8 шагов известно только после чтения sigmas
         supports_lora=True,
@@ -780,17 +784,16 @@ class QwenImage21Backend:
         """
         torch = _torch()
         images = as_image_list(image)
-        if not images:
-            raise ValueError("qwen_image21: нужен входной кадр (conditioning=img2img)")
-
-        input_images = self.resize_inputs(cfg, handle, images)
+        # T2I: картинок нет — это штатный путь (caps.requires_image=False), промт кодируется без
+        # vision-токенов. `None` (а не `[]`) важен: по нему пайплайн понимает, что image_pad_mask пуст.
+        input_images = self.resize_inputs(cfg, handle, images) if images else None
         device = torch.device(handle.encoder_device or "cpu")
         on_gpu = device.type == "cuda"
         if on_gpu:
             print("[4/5] кодирование промта на GPU (Qwen3VL-8B, стриминг)...", flush=True)
         else:
             print("[4/5] кодирование промта на CPU (Qwen3VL-8B, ~1-3 мин)...", flush=True)
-        if len(input_images) > 1:
+        if input_images and len(input_images) > 1:
             print(f"    референсов: {len(input_images)} (vision-токены по всем)", flush=True)
         started = time.time()
         try:
@@ -861,17 +864,25 @@ class QwenImage21Backend:
         elif handle.input_image is not None:
             input_images = [handle.input_image]
         else:
-            raise ValueError("qwen_image21: нет входного кадра (conditioning=img2img)")
+            input_images = []                     # T2I: входного кадра нет (см. caps.requires_image)
 
         first = images[0] if images else None
-        crop = handle.crop or tuple(int(v) for v in cfg.crop(*first.size))
+        if handle.crop is not None:
+            crop = handle.crop
+        elif first is not None:
+            crop = tuple(int(v) for v in cfg.crop(*first.size))
+        else:
+            crop = tuple(int(v) for v in cfg.crop(0, 0))      # T2I: пропорция из --aspect
         crop_w, crop_h = int(crop[0]), int(crop[1])
-        resolution = int(handle.resolution or cfg.effective_resolution(*first.size))
+        resolution = int(handle.resolution or
+                         (cfg.effective_resolution(*first.size) if first is not None
+                          else cfg.effective_resolution(0, 0)))
 
         prompt_embeds = cond["embeds"].to("cuda", dtype=torch.bfloat16)
         mask = cond.get("mask")
         prompt_embeds_mask = mask.to("cuda") if mask is not None else None
-        image_pad_mask = cond["img_mask"].to("cuda")
+        image_mask = cond.get("img_mask")
+        image_pad_mask = image_mask.to("cuda") if image_mask is not None else None
 
         def cached_encode_prompt(*_args: Any, **_kwargs: Any):
             return prompt_embeds, prompt_embeds_mask, image_pad_mask
@@ -902,7 +913,8 @@ class QwenImage21Backend:
                     prompt=None,
                     prompt_embeds=prompt_embeds,
                     prompt_embeds_mask=prompt_embeds_mask,
-                    image=input_images[0] if len(input_images) == 1 else input_images,
+                    image=(input_images[0] if len(input_images) == 1
+                       else (input_images if input_images else None)),
                     height=crop_h,
                     width=crop_w,
                     num_inference_steps=steps,

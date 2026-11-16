@@ -42,8 +42,11 @@ from qwenstyle.registry import get_generation     # noqa: E402
 #: Вход с реальным файлом (2867x1612): пропорция 1.779 -> при `--resolution 1024` сетка 1376x768.
 INPUT_IMAGE = REPO_ROOT / "prompts" / "imgs" / "ire0nita-store.png"
 PROMPT = "fusal style. [TASK: TEXT_IMAGE] test prompt for preflight"
-REQUIRES_IMAGE_CAPS = get_generation("qwen_image21").caps
-T2I_CAPS = replace(REQUIRES_IMAGE_CAPS, requires_image=False)
+#: `qwen_image21` умеет T2I (`requires_image=False`), поэтому «референс обязателен» — это
+#: заглушка того же бекенда: ветка проверяется на свойстве caps, а не на имени модели.
+QWEN_CAPS = get_generation("qwen_image21").caps
+REQUIRES_IMAGE_CAPS = replace(QWEN_CAPS, requires_image=True)
+T2I_CAPS = replace(QWEN_CAPS, requires_image=False)
 
 
 # --------------------------------------------------------------------------- #

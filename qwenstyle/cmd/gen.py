@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import (
+    ASPECT_RATIOS,
     ConfigError,
     RunConfig,
     available_presets,
@@ -634,7 +635,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     source.add_argument("--prompt", default=None, metavar="NAME",
                         help=f"папка промта {PROMPT_ROOT}/NAME/: {PROMPT_FILE} (текст) + "
                              f"image*.png|jpg|jpeg|webp (референсы, до max_images модели)")
-    source.add_argument("--aspect", choices=("16:9", "4:3", "1:1"), default=None, metavar="R",
+    source.add_argument("--aspect", choices=tuple(ASPECT_RATIOS), default=None, metavar="R",
                         help="пропорция кадра (по умолчанию — пропорция первого референса; "
                              "для T2I без флага — 1:1)")
     source.add_argument("--set", dest="sets", action="append", default=[], metavar="KEY=VALUE",

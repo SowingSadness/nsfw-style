@@ -10,7 +10,7 @@
 
 | публичное | внутреннее (может меняться без предупреждения) |
 |---|---|
-| 15 публичных пресетов (`VRAM8-*` 4, `VRAM12-*` 4, `VRAM16-*` 7) и профили машин (`qwenstyle/profiles.py`) | остальные пресеты (`base`, `turbo`, `h3-image`) |
+| 15 публичных пресетов (`VRAM8-*` 4, `VRAM12-*` 4, `VRAM16-*` 7) и профили машин (`qwenstyle/profiles.py`) | остальные пресеты (`base`, `turbo`, `h3-image`, `max-h3`) |
 | подкоманды `gen`, `run`, `selftest`, `env`, `models`, `cache`, `bench`, `config`, `compare-upscale` | внутренние функции `pipeline.run_batch`, `io.batch_paths`, `runlog`, `streaming`, `precision`, `cleanup` |
 | файлы `prompts/<имя>/prompt.txt` + `image*`, папка сессии `out/<имя>/gen-<штамп>/` | layout `cache/embeds` (`*.pt` + `.json`), `cache/models`, имена `fp8_transformer*` |
 | `RunConfig.from_profile(<имя>)`, флаги `gen`/`run`, `--set` по `ParameterSpec` | dev-бекенды (`flux2`, `seedvr2`) и их параметры |
@@ -42,6 +42,8 @@ dev-пресеты и dev-бекенды. Всё, что адресуется п
 `full-flux2`) удалены вместе с остальными dev-надстройками. Бекенд `qwenstyle/backends/flux2.py`
 при этом остался — без пресетов он доступен только через `--set generation.backend=flux2`
 и прямую сборку `RunConfig`.
+
+| `max-h3` | `extends: h3-image`, `size_px: 3072` → 4096×3072, 6 шагов PDD, fp8 + `offload: group` | максимальный кадр H3 на 16 ГиБ (1440p 165 s, 1792p 174 s, 2048p 182 s, 2560p 204 s, 3072p 237 s); 4096p проходит генерацию и VAE, но падает в постобработке на хостовой RAM |
 
 ## 3. SeedVR2 — dev-опция
 

@@ -10,7 +10,7 @@
 добирается ESRGAN). Тест фиксирует раскладку **без весов, без CUDA и без сети**:
 
 1. **один словарь**: каждый файл `qwenstyle/presets/*.yaml` — либо тариф (ровно в одном профиле
-   `PROFILES`), либо известный dev-пресет (`base`/`turbo`/`h3-image`) вне профилей; обратное тоже
+   `PROFILES`), либо известный dev-пресет (`base`/`turbo`/`h3-image`/`max-h3`) вне профилей; обратное тоже
    верно — ни одного имени профиля без файла, ни одного осиротевшего файла;
 2. **имена семейств**: только `VRAM8`/`VRAM12`/`VRAM16` у тарифов (никаких `weak-*`/`strong-*`/
    `flagship-*`), у суффиксов — известный набор;
@@ -49,7 +49,7 @@ FAMILIES = ("VRAM8", "VRAM12", "VRAM16")
 SUFFIXES = ("preview", "release", "preview-anime", "release-anime", "anime",
             "4k-fast", "r3-169", "r3-43")
 #: Пресеты-не-тарифы: конкретная модель/база, а не «сколько VRAM». В профили не входят.
-NON_TARIFF = ("base", "turbo", "h3-image")
+NON_TARIFF = ("base", "turbo", "h3-image", "max-h3")
 #: KV-кеш: у тарифов 12/16 префикс живёт в RAM, у 8 — по числу референсов (дефолт конфига).
 KV_TARIFF = "offload"
 KV_SMALL = "auto-offload-ref2"
@@ -82,8 +82,8 @@ def _family(name: str) -> str:
 def case_single_dictionary() -> None:
     """1. Каждый файл — ровно в одном профиле, и ни одного имени профиля без файла."""
     files = preset_files()
-    if len(files) != 18:
-        raise AssertionError(f"в qwenstyle/presets {len(files)} файлов, ожидалось 18: {files}")
+    if len(files) != 19:
+        raise AssertionError(f"в qwenstyle/presets {len(files)} файлов, ожидалось 19: {files}")
     registered = set(available_presets())
     unknown = [name for name in files if name not in registered]
     if unknown:

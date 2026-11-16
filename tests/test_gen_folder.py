@@ -217,24 +217,38 @@ def case_max_images_guard() -> None:
 
 
 def case_no_images() -> None:
-    """5. Папка без картинок: ошибка для `requires_image=True`, законный `noref` для T2I."""
+    """5. Папка без картинок: Qwen-Image-2.1 и H3 строят T2I-план (`noref`).
+
+    Проверка «референс обязателен» живёт в `Capabilities.requires_image` и срабатывает только
+    у бекенда, который её объявляет: у `qwen_image21` и `minimax_h3_image` это `False` (T2I —
+    штатный режим), поэтому ветка проверяется заглушкой caps, как в `tests/test_t2i_preflight.py`.
+    """
+    from types import SimpleNamespace
+
+    from qwenstyle import pipeline
+
     with temp_roots() as root:
         make_case(root, "empty", [])
-        code, out = run_gen("empty", preset=PRESET_NEEDS_IMAGE)
-        if code != 2:
-            raise AssertionError(f"без картинок при requires_image=True ожидался код 2, "
-                                 f"получено {code}: {out[-400:]}")
-        for token in ("image", PRESET_NEEDS_IMAGE):
-            if token not in out:
-                raise AssertionError(f"в ошибке нет {token!r}: {out[-400:]}")
-        # модель, которой референс не нужен, строит T2I-план (noref) на том же промте
-        code, out = run_gen("empty", preset=PRESET_T2I, aspect="16:9")
-        if code != 0:
-            raise AssertionError(f"T2I без картинок ({PRESET_T2I}) ожидал код 0, "
-                                 f"получено {code}: {out[-600:]}")
-        if "T2I" not in out:
-            raise AssertionError(f"в выводе нет пометки T2I: {out[-400:]}")
-    print(f"  ok: пустая папка -> exit 2 для {PRESET_NEEDS_IMAGE}, T2I (noref) для {PRESET_T2I}")
+        for preset in (PRESET_NEEDS_IMAGE, PRESET_T2I):
+            code, out = run_gen("empty", preset=preset, aspect="16:9")
+            if code != 0:
+                raise AssertionError(f"T2I без картинок ({preset}) ожидал код 0, "
+                                     f"получено {code}: {out[-600:]}")
+            if "T2I" not in out:
+                raise AssertionError(f"в выводе {preset} нет пометки T2I: {out[-400:]}")
+
+    # Бекенд, объявивший requires_image=True, обязан упасть до загрузки весов.
+    cfg = RunConfig.from_profile(PRESET_NEEDS_IMAGE, aspect="16:9")
+    problem = pipeline.input_problem(cfg, SimpleNamespace(requires_image=True))
+    if not problem or "требует референс" not in problem:
+        raise AssertionError(f"requires_image=True не даёт ошибку про --input: {problem!r}")
+    # И обратное: без --aspect T2I не знает пропорцию кадра.
+    problem = pipeline.input_problem(RunConfig.from_profile(PRESET_NEEDS_IMAGE),
+                                     SimpleNamespace(requires_image=False))
+    if not problem or "--aspect" not in problem:
+        raise AssertionError(f"T2I без --aspect не просит пропорцию: {problem!r}")
+    print(f"  ok: пустая папка -> T2I (noref) для {PRESET_NEEDS_IMAGE} и {PRESET_T2I}; "
+          f"requires_image=True и «нет --aspect» ловятся")
 
 
 def case_prompt_dir() -> None:

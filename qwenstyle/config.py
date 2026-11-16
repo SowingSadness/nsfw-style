@@ -41,7 +41,10 @@ CACHE_SCHEMA = "qwenstyle-1"
 
 DEFAULT_SEED = 20261113
 # Допустимые пропорции кадра (--aspect). None = как у входного изображения.
-ASPECT_RATIOS: dict[str, float] = {"16:9": 16 / 9, "4:3": 4 / 3, "1:1": 1.0}
+#: `2:3` — портрет (постеры/обложки): ширина = высота * 2/3.
+ASPECT_RATIOS: dict[str, float] = {
+    "16:9": 16 / 9, "4:3": 4 / 3, "1:1": 1.0, "2:3": 2 / 3,
+}
 DEFAULT_RESOLUTION = 1024      # 768p при 16:9 (run_style.py: --resolution по умолчанию 1024)
 PREVIEW_RESOLUTION = 640       # 480p при 16:9 (run_style.py: --preview)
 PREVIEW_MAX_SIZE_PX = 480      # 480p и ниже — черновой режим, как `--preview`

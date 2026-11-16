@@ -143,7 +143,7 @@ python -m qwenstyle gen --preset VRAM12 --prompt <имя> [--seeds 84,32-38 | --
                                 # главная точка входа: папка prompts/<имя>/ (prompt.txt + image*)
                                 # -> out/<имя>/gen-YYYYMMDD-HHMM/ (кадры, run.log, meta.json в корне)
                                 # --dry-run — план без весов; --no-logs — без run.log
-python -m qwenstyle run [--preview | --size 768p | --resolution N] [--aspect 16:9|4:3|1:1] [--prompt-file ...] [--input ...] --out ...
+python -m qwenstyle run [--preview | --size 768p | --resolution N] [--aspect 16:9|4:3|1:1|2:3] [--prompt-file ...] [--input ...] --out ...
                                 # одиночный кадр: все флаги старого run_style.py + --config/--set
                                 # --input необязателен: нужен ли референс, решает `Capabilities.requires_image`
                                 # --dry-run (план без весов)
@@ -179,6 +179,7 @@ hf cache verify <repo>                                  # целостность
 | `VRAM16-4k-fast` | 1088p → ESRGAN ×1.985 → 3812×2160 | 25 шагов, `offload: group`, `kv_cache: offload` |
 | `VRAM16-r3-169` | 3 референса, 16:9, максимум на 16 ГиБ | `size_px: 912` + `aspect: 16:9` → crop 1632×896, 25 шагов, `offload: group`, ESRGAN ×2.41 → 3934×2160 |
 | `VRAM16-r3-43` | то же для 4:3 | `size_px: 1056` + `aspect: 4:3` → crop 1408×1056, ESRGAN ×2.045 → 2880×2160 |
+| `max-h3` | dev: H3 на максимуме 16 ГиБ | `extends: h3-image`, `size_px: 3072` → 4096×3072 (6 шагов PDD, `offload: group`); 4096p упирается в RAM на постобработке, а не в VRAM |
 | `base` | dev: профиль по умолчанию | `Qwen/Qwen-Image-2.1`, 25 шагов, fp8, `cache/fp8_transformer` |
 | `turbo` | dev: distill-профиль (база `VRAM8-*`) | transformer из `Qwen/Qwen-Image-2.1-Turbo` + Turbo E6 R128 LoRA, 8 шагов (расписание `sample_sigmas`), `cache/fp8_transformer_turbo` |
 | `h3-image` | dev: MiniMax-H3-Image, T2I и edit одним пайплайном | `MiniMaxAI/MiniMax-H3-Image` (33.13B), 6 шагов PDD, fp8 (30.9 GiB) + `offload: group`, `cache/fp8_transformer_h3_image`, LoRA нет, энкодер Qwen3-VL-32B (`h3qwen32-heretic`) |
@@ -327,7 +328,7 @@ VRAM после загрузки: **9.0/16.0 GiB**; RSS **1.4 GiB** на быс�
 1696×960 = 960p, 1920×1088 = 1088p). `--size NNNp` задаёт высоту, а `--resolution`
 (= `sqrt(площадь crop)` = `H * sqrt(ratio)`) считается из неё автоматически по пропорциям входа;
 `--resolution` остаётся для совместимости. `--size 480p` и ниже также включает 8 шагов, как `--preview`.
-`--aspect 16:9|4:3|1:1` подменяет пропорцию кадра (по умолчанию — пропорция входа): при 1440p
+`--aspect 16:9|4:3|1:1|2:3` подменяет пропорцию кадра (по умолчанию — пропорция входа): при 1440p
 это 2560×1440 / 1920×1440 / 1440×1440, референс подгоняется `fit_cover` (scale-to-cover +
 центральный кроп). Аспект входит в ключ кэша через `crop`, поэтому его смена = новый энкод
 (6–35 с на GPU, 55–255 с на CPU).

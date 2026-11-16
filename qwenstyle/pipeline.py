@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from .cache import Blob, BlobCache
 from .cleanup import CacheWrite, DeferredCleanup, normalize_policy, plan_names
 from .config import (
+    ASPECT_RATIOS,
     CACHE_SCHEMA,
     DEFAULT_ENCODER_DEVICE,
     DEFAULT_ENCODER_DTYPE,
@@ -395,8 +396,8 @@ def input_problem(cfg: RunConfig, caps: Any) -> str | None:
             backend = str(cfg.generation.backend or "бекенд")
             return f"модель {backend} требует референс: передайте --input <png>"
         if not str(cfg.aspect or "").strip():
-            return ("без --input нужен --aspect (16:9|4:3|1:1), иначе не из чего взять "
-                    "пропорцию кадра")
+            return (f"без --input нужен --aspect ({'|'.join(ASPECT_RATIOS)}), иначе не из чего "
+                    f"взять пропорцию кадра")
         return None
     for path in (cfg.inputs or (cfg.input,)):      # все референсы, не только первый
         if not Path(str(path)).is_file():
