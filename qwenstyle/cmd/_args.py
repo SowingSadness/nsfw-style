@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import math
+
 #: Значения `--upscale`, которые выключают апскейл целиком (регистр и пробелы не важны).
 UPSCALE_OFF: tuple[str, ...] = ("null", "none", "off")
 
@@ -18,20 +20,33 @@ UPSCALE_OFF: tuple[str, ...] = ("null", "none", "off")
 UPSCALE_HELP = ("число = множитель апскейла (target_height пресета главнее); "
                 "null = выключить апскейл целиком")
 
+#: Один текст на все отказы: мусор, пусто, `nan`/`inf`, отрицательное.
+UPSCALE_ERR = "--upscale: ожидается число > 0 или null|none|off"
+
 
 def parse_upscale(text: str | None) -> float | None:
-    """`null|none|off` (и пусто) -> `None`; число -> `float`; мусор -> `ValueError`.
+    """`null|none|off` -> `None`; конечное число >= 0 -> `float`; всё остальное -> `ValueError`.
 
-    `None` означает «выключить апскейл целиком» (вызывающий код ставит `upscale: null` в пресет),
-    а не «флаг не задан»: отсутствие флага проверяется до вызова (`args.upscale is not None`).
+    `None` на входе — «флаг не задан» (вызывающий код и так проверяет `args.upscale is not None`)
+    и возвращается как `None` без разбора; пустая строка и одни пробелы — ошибка, а не выключение:
+    `--upscale ""` в командной строке почти наверняка опечатка, и молча выключить апскейл хуже,
+    чем сказать об этом. `0` — «фактор 0», допустим (сам апскейл выключает только `null`).
+    `nan`/`inf`/`-1` не числа множителя, поэтому тоже отказ.
     """
-    raw = str("" if text is None else text).strip().lower()
-    if not raw or raw in UPSCALE_OFF:
+    if text is None:
         return None
+    raw = str(text).strip().lower()
+    if raw in UPSCALE_OFF:
+        return None
+    if not raw:
+        raise ValueError(UPSCALE_ERR)
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
-        raise ValueError("--upscale: ожидается число или null|none|off") from None
+        raise ValueError(UPSCALE_ERR) from None
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(UPSCALE_ERR)
+    return value
 
 
-__all__ = ["UPSCALE_HELP", "UPSCALE_OFF", "parse_upscale"]
+__all__ = ["UPSCALE_ERR", "UPSCALE_HELP", "UPSCALE_OFF", "parse_upscale"]

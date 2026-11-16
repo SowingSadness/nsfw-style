@@ -19,10 +19,13 @@
 4. **апскейл**: у `VRAM12-release*`/`VRAM16-release*` — `upscale: null` (`target_height is None`,
    `factor == 0`), у `VRAM8-release*` — 1080 (640p + ESRGAN), у `VRAM16-4k-fast`/`VRAM16-r3-*` — 2160;
 5. **черновик 12 ГБ**: у `VRAM12-preview*` — `offload: group`;
-6. **`--upscale=null`**: `parse_upscale` (`null|none|off` -> `None`, число -> `float`, мусор ->
-   `ValueError`) и превращение `None` в пустой блок `upscale` (апскейл выключен целиком);
+6. **`--upscale=null`**: `parse_upscale` (`null|none|off` -> `None`, конечное число >= 0 ->
+   `float`, а пустая строка/`nan`/`inf`/отрицательное/мусор -> `ValueError`) и превращение `None`
+   в пустой блок `upscale` (апскейл выключен целиком);
 7. **обратное включение**: `--set upscale.target_height=1440` на `VRAM12-release` снова даёт
-   апскейл (960 -> 1440, фактор 1.5) — приоритет высоты над `factor` не поехал.
+   апскейл (960 -> 1440, фактор 1.5) — приоритет высоты над `factor` не поехал;
+8. **регистр в `--preset`**: `vram12` -> `VRAM12-release` (та же функция `resolve_preset`, что
+   у `gen`), путь к YAML возвращается как есть, два имени с разным регистром — `ConfigError`.
 """
 from __future__ import annotations
 
@@ -36,7 +39,8 @@ if str(REPO_ROOT) not in sys.path:
 sys.dont_write_bytecode = True                   # тест не должен оставлять __pycache__ в пакете
 
 from qwenstyle.cmd._args import parse_upscale      # noqa: E402 — после правки sys.path
-from qwenstyle.config import PRESETS_DIR, RunConfig, available_presets   # noqa: E402
+from qwenstyle.cmd.gen import casefold_index, resolve_preset   # noqa: E402 — та же функция, что у gen
+from qwenstyle.config import ConfigError, PRESETS_DIR, RunConfig, available_presets   # noqa: E402
 from qwenstyle.profiles import PROFILE_ORDER, PROFILES                  # noqa: E402
 
 #: Тарифы железа: имя файла = `<семейство>-<вариант>`.
@@ -196,23 +200,29 @@ def case_offload_preview_12() -> None:
 
 
 def case_parse_upscale() -> None:
-    """6. `parse_upscale`: `null|none|off` (регистр/пробелы) -> `None`, число -> float, мусор -> ValueError."""
-    for text in ("null", "NULL", "none", "None", "off", "OFF", " null ", "", None):
+    """6. `parse_upscale`: `null|none|off` -> `None`, число >= 0 -> float, всё остальное — `ValueError`."""
+    # `None` = «флаг не задан» (вызывающий код проверяет `args.upscale is not None` до вызова).
+    for text in ("null", "NULL", "none", "None", "off", "OFF", " null ", None):
         if parse_upscale(text) is not None:
             raise AssertionError(f"parse_upscale({text!r}) должен вернуть None (апскейл выключен)")
-    for text, want in (("2", 2.0), ("2.5", 2.5), (" 1.5 ", 1.5), ("0", 0.0), ("4", 4.0)):
+    # `0` — «фактор 0», допустим: целиком апскейл выключает только `null`.
+    for text, want in (("2", 2.0), ("2.5", 2.5), (" 1.5 ", 1.5), ("0", 0.0), ("0.0", 0.0), ("4", 4.0)):
         got = parse_upscale(text)
         if got != want or not isinstance(got, float):
             raise AssertionError(f"parse_upscale({text!r}) = {got!r}, ожидалось {want}")
-    for text in ("abc", "nullx", "--", "2,5x"):
+    # Пусто/пробелы, не-конечные и отрицательные — не множитель: молча выключать апскейл нельзя.
+    for text in ("", "   ", "\t", "nan", "NaN", "inf", "-inf", "infinity", "-1", "-0.5",
+                 "abc", "nullx", "--", "2,5x"):
         try:
             parse_upscale(text)
         except ValueError as exc:
-            if "--upscale" not in str(exc) or "null|none|off" not in str(exc):
-                raise AssertionError(f"текст ошибки без подсказки: {exc}") from None
+            message = str(exc)
+            for part in ("--upscale", "число > 0", "null|none|off"):
+                if part not in message:
+                    raise AssertionError(f"{text!r}: текст ошибки без {part!r}: {message}") from None
             continue
         raise AssertionError(f"parse_upscale({text!r}) не поднял ValueError")
-    print("  ok: null|none|off -> None, число -> float, мусор -> ValueError с подсказкой")
+    print("  ok: null|none|off -> None, число >= 0 -> float, пусто/nan/inf/-1/мусор -> ValueError")
 
 
 def case_upscale_reenable() -> None:
@@ -232,6 +242,32 @@ def case_upscale_reenable() -> None:
           f"{int(round(native * factor))}")
 
 
+def case_preset_case_insensitive() -> None:
+    """8. `--preset` не зависит от регистра; путь к YAML не трогается; неоднозначность — ошибка."""
+    for raw, want in (("vram12", "VRAM12-release"), ("VRAM12", "VRAM12-release"),
+                      ("Vram12", "VRAM12-release"), (" vram8-preview ", "VRAM8-preview"),
+                      ("vram12-release", "VRAM12-release"),
+                      ("vram16-4k-fast", "VRAM16-4k-fast"),
+                      ("vram16-anime", "VRAM16-release-anime"),
+                      ("base", "base"), ("Turbo", "turbo")):
+        got = resolve_preset(raw)
+        if got != want:
+            raise AssertionError(f"resolve_preset({raw!r}) = {got!r}, ожидалось {want!r}")
+    # Путь к файлу резолвит `config.preset_path`: регистр и текст не трогаем.
+    for path in ("qwenstyle/presets/VRAM12-release.yaml",
+                 "qwenstyle/presets/LowerCase.yaml"):
+        if resolve_preset(path) != path:
+            raise AssertionError(f"resolve_preset({path!r}) должен вернуть путь как есть")
+    try:
+        casefold_index(("VRAM12-release", "Vram12-release"), "тест")
+    except ConfigError as exc:
+        if "регистр" not in str(exc):
+            raise AssertionError(f"текст ошибки без объяснения: {exc}") from None
+    else:
+        raise AssertionError("два имени, отличающиеся только регистром, должны давать ConfigError")
+    print("  ok: vram12 -> VRAM12-release, путь к YAML как есть, неоднозначность -> ConfigError")
+
+
 CASES = (
     ("1. один словарь: файлы <-> профили", case_single_dictionary),
     ("2. имена семейств VRAM8/VRAM12/VRAM16", case_family_names),
@@ -240,6 +276,7 @@ CASES = (
     ("5. VRAM12-preview*: offload=group", case_offload_preview_12),
     ("6. parse_upscale", case_parse_upscale),
     ("7. апскейл включается обратно через target_height", case_upscale_reenable),
+    ("8. --preset без учёта регистра", case_preset_case_insensitive),
 )
 
 

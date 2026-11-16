@@ -20,6 +20,9 @@
 `--preset` принимает шорткаты (`VRAM8`/`VRAM12`/`VRAM16` = `<family>-release`,
 `<family>-preview`, `-release`, `-preview-anime`, `-release-anime`, `-anime` = `-release-anime`,
 `VRAM16-4k-fast`) и **точное имя любого** зарегистрированного пресета, включая dev-пресеты.
+Регистр не важен: `--preset vram12` = `--preset VRAM12` (а два файла, отличающиеся только
+регистром, — ошибка, а не угадывание). Строка с `/` или `.yaml` считается путём к файлу и
+не трогается.
 `--seeds` (`"84"`, `"32-38"`, `"1,7,42"`) и `--count N` (N случайных сидов) — взаимоисключающие;
 ни одного — один случайный сид (печатается). Без картинок: если пресет требует референс —
 ошибка, иначе T2I (`noref`), а пропорцию кадра задаёт `--aspect`.
@@ -37,6 +40,7 @@ import random
 import re
 import sys
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +68,8 @@ PROMPT_ROOT = "prompts"
 OUT_ROOT = "out"
 #: Расширения референсов (регистронезависимо).
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+#: Расширения, по которым `--preset` — путь к файлу, а не имя пресета.
+PATH_SUFFIXES = (".yaml", ".yml")
 #: Диапазон случайных сидов (`--count`): положительные 32-битные, как `--seed`.
 SEED_MIN = 1
 SEED_MAX = 2 ** 31 - 1
@@ -98,17 +104,55 @@ def preset_aliases() -> dict[str, str]:
     return aliases
 
 
-def resolve_preset(raw: str) -> str:
-    """Шорткат или точное имя -> имя пресета; неизвестное — `ConfigError` с перечнем.
+def looks_like_path(raw: str) -> bool:
+    """`--preset` с `/`, обратным слэшем или `.yaml` — путь к файлу: текст и регистр не трогаем."""
+    text = str(raw or "").strip()
+    return "/" in text or "\\" in text or text.lower().endswith(PATH_SUFFIXES)
 
-    Приоритет у точного имени: dev-пресет (`base`, `turbo`, `preview`, `h3-image`, …) важнее
-    одноимённого шортката, поэтому `--preset base` значит именно `base`.
+
+def casefold_index(names: Iterable[str], what: str) -> dict[str, str]:
+    """Имя без учёта регистра -> каноническое имя; различия только регистром -> `ConfigError`.
+
+    Порядок `glob()` (а значит и `available_presets()`) не стабилен между файловыми системами,
+    поэтому два имени, отличающиеся только регистром, нельзя разрешать «как получится»: это
+    ошибка с перечнем конфликтующих файлов, а не молчаливый выбор.
+    """
+    index: dict[str, str] = {}
+    clashes: dict[str, list[str]] = {}
+    for name in names:
+        key = name.casefold()
+        known = index.get(key)
+        if known is None:
+            index[key] = name
+        elif known != name:
+            clashes.setdefault(key, [known]).append(name)
+    if clashes:
+        detail = "; ".join(f"{key}: {', '.join(vals)}" for key, vals in sorted(clashes.items()))
+        raise ConfigError(f"{what}: имена отличаются только регистром — {detail}")
+    return index
+
+
+def resolve_preset(raw: str) -> str:
+    """Шорткат или точное имя -> имя пресета; регистр не важен; неизвестное — `ConfigError`.
+
+    Приоритет: точное имя -> точное без учёта регистра -> шорткат (тоже без учёта регистра),
+    поэтому dev-пресет (`base`, `turbo`, `h3-image`) важнее одноимённого шортката. Строка с `/`
+    или `.yaml` — путь к файлу и возвращается как есть (его проверяет `config.preset_path`).
     """
     name = str(raw or "").strip()
+    if looks_like_path(name):
+        return name
     registered = available_presets()
     if name in registered:
         return name
-    alias = preset_aliases().get(name)
+    folded = name.casefold()
+    canonical = casefold_index(registered, "пресеты qwenstyle/presets/").get(folded)
+    if canonical:
+        return canonical
+    aliases = preset_aliases()
+    alias_key = (name if name in aliases
+                 else casefold_index(aliases, "шорткаты --preset").get(folded))
+    alias = aliases.get(alias_key) if alias_key else None
     if alias and alias in registered:
         return alias
     raise ConfigError(
@@ -586,7 +630,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     source.add_argument("--preset", default=None, metavar="PRESET",
                         help="VRAM8|VRAM12|VRAM16 (== <family>-release), <family>-preview|"
                              "-release|-preview-anime|-release-anime|-anime, VRAM16-4k-fast "
-                             "или точное имя любого пресета из qwenstyle/presets/")
+                             "или точное имя любого пресета из qwenstyle/presets/; регистр не важен")
     source.add_argument("--prompt", default=None, metavar="NAME",
                         help=f"папка промта {PROMPT_ROOT}/NAME/: {PROMPT_FILE} (текст) + "
                              f"image*.png|jpg|jpeg|webp (референсы, до max_images модели)")
@@ -612,5 +656,6 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                            help="не писать run.log в папку сессии (кадры и meta.json остаются)")
 
 
-__all__ = ["HELP", "NAME", "add_args", "build_config", "discover_images", "preset_aliases",
-           "public_presets", "resolve_preset", "resolve_seeds", "run", "session_dir"]
+__all__ = ["HELP", "NAME", "PATH_SUFFIXES", "add_args", "build_config", "casefold_index",
+           "discover_images", "looks_like_path", "preset_aliases", "public_presets",
+           "resolve_preset", "resolve_seeds", "run", "session_dir"]
