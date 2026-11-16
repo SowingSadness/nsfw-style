@@ -10,7 +10,7 @@
 
 | публичное | внутреннее (может меняться без предупреждения) |
 |---|---|
-| 13 публичных пресетов (`weak-*`, `strong-*`, `flagship-*`) и профили машин (`qwenstyle/profiles.py`) | остальные пресеты (`base`, `turbo`, `h3-image`, `flagship-r3-169`, `flagship-r3-43`) |
+| 15 публичных пресетов (`VRAM8-*` 4, `VRAM12-*` 4, `VRAM16-*` 7) и профили машин (`qwenstyle/profiles.py`) | остальные пресеты (`base`, `turbo`, `h3-image`) |
 | подкоманды `gen`, `run`, `selftest`, `env`, `models`, `cache`, `bench`, `config`, `compare-upscale` | внутренние функции `pipeline.run_batch`, `io.batch_paths`, `runlog`, `streaming`, `precision`, `cleanup` |
 | файлы `prompts/<имя>/prompt.txt` + `image*`, папка сессии `out/<имя>/gen-<штамп>/` | layout `cache/embeds` (`*.pt` + `.json`), `cache/models`, имена `fp8_transformer*` |
 | `RunConfig.from_profile(<имя>)`, флаги `gen`/`run`, `--set` по `ParameterSpec` | dev-бекенды (`flux2`, `seedvr2`) и их параметры |
@@ -29,14 +29,19 @@ dev-пресеты и dev-бекенды. Всё, что адресуется п
 | пресет | что это | зачем живёт |
 |---|---|---|
 | `base` | `Qwen/Qwen-Image-2.1` + FUSAL R80, 25 шагов, fp8, энкодер `heretic` | корневой `extends` для всех остальных пресетов |
-| `turbo` | transformer из `Qwen/Qwen-Image-2.1-Turbo` + Turbo E6 R128, 8 шагов (расписание `sample_sigmas`) | быстрый distill-профиль; адаптер помечен авторами как preview |
-| `h3-image` | `MiniMaxAI/MiniMax-H3-Image` (33.13B), 6 шагов PDD, fp8 30.9 ГиБ + `offload: group`, энкодер Qwen3-VL-32B | T2I + edit одним пайплайном; база флагманских пресетов |
-| `flagship-r3-169` | `extends: base`, **3 референса**, `size_px: 912` + `aspect: 16:9` → crop 1632x896, 25 шагов, `offload: group`, ESRGAN x2.41 → 3934x2160 | максимальный кадр на 16 ГиБ, который проходит энкодер при трёх референсах (`928p`/`1088p`/`1440p` — OOM на кодировании промта) |
-| `flagship-r3-43` | то же с `aspect: 4:3`, `size_px: 1056` → crop 1408x1056, ESRGAN x2.045 → 2880x2160 | там же; 4:3 при том же потолке площади даёт кадр выше (1072p — уже OOM) |
+| `turbo` | transformer из `Qwen/Qwen-Image-2.1-Turbo` + Turbo E6 R128, 8 шагов (расписание `sample_sigmas`) | быстрый distill-профиль; адаптер помечен авторами как preview; база `VRAM8-*` |
+| `h3-image` | `MiniMaxAI/MiniMax-H3-Image` (33.13B), 6 шагов PDD, fp8 30.9 ГиБ + `offload: group`, энкодер Qwen3-VL-32B | T2I + edit одним пайплайном |
+
+Три референса на 16 ГиБ (`VRAM16-r3-169`, `VRAM16-r3-43`) — публичные пресеты профиля `VRAM16`
+(`profiles.py`), не dev: `size_px: 912` + `aspect: 16:9` → crop 1632×896, ESRGAN ×2.41 → 3934×2160
+и `size_px: 1056` + `aspect: 4:3` → crop 1408×1056, ×2.045 → 2880×2160. Это максимум, который
+проходит энкодер при трёх референсах (`928p`/`1088p`/`1440p` — OOM на кодировании промта).
 
 Удалены (пресеты есть только в истории): `preview-qwen`, `anime`, `full-qwen`, `qwen-2k`, `qwen`,
-`flux2`, `preview`, `demo`, `full-flux2`. Бекенд `qwenstyle/backends/flux2.py` при этом остался —
-без пресетов он доступен только через `--set generation.backend=flux2` и прямую сборку `RunConfig`.
+`flux2`, `preview`, `demo`, `full-flux2` — например, FLUX.2-пресеты (`flux2`, `preview`, `demo`,
+`full-flux2`) удалены вместе с остальными dev-надстройками. Бекенд `qwenstyle/backends/flux2.py`
+при этом остался — без пресетов он доступен только через `--set generation.backend=flux2`
+и прямую сборку `RunConfig`.
 
 ## 3. SeedVR2 — dev-опция
 
@@ -106,12 +111,13 @@ cache/
 |---|---|
 | переезд на `G:\Work\nsfw-style` | проект переехал с `D:\…\qwen-imate-2.1-anime` как замороженный снимок; монолиты `run_style.py`, `upscale.py`, `colorfix.py`, `tools/*` удалены — вся логика в пакете `qwenstyle` (git тогда не было, восстановить нельзя, поэтому возможности добавляются только в пакет) |
 | `v0.1.0`, шаг 1 | git пересоздан с нуля, `.pi/` вне репозитория, `.gitattributes` (`* text=auto eol=lf`) |
-| шаг 2–3 | `qwenstyle/profiles.py` (weak/strong/flagship), `models download --profile/--probe`, `selftest`, 13 публичных пресетов |
+| шаг 2–3 | `qwenstyle/profiles.py` (VRAM8/VRAM12/VRAM16), `models download --profile/--probe`, `selftest` |
 | шаг 4 | кеши разделены: `cache/embeds` ↔ `cache/models` (переименование в пределах тома, без пересчёта) |
 | шаг 5 | команда сверки кадров (parity) и файл эталонов удалены: сверка нового каркаса со старыми монолитами была завершена до удаления; проверка установки теперь `selftest` |
 | шаг 6 | установка одной командой (`bootstrap.ps1/.sh/.cmd`), `pyproject.toml`, MIT `LICENSE` |
 | шаг 7–9 | multi-ref (до `max_images`), команда `gen` вместо `batch`, параметры из адаптеров (`parameters()`, `--set` валидируется по спекам) |
-| шаг 11–12 | интеграционный прогон 13 пресетов (`docs/bench/presets.md`), публичная документация |
+| шаг 11–12 | интеграционный прогон пресетов (`docs/bench/presets.md`), публичная документация |
+| шаг 13–14 | пресеты и профили названы по VRAM (`VRAM8`/`VRAM12`/`VRAM16`), `VRAM12` влезает в 12 ГБ (`offload: group` + `kv_cache: offload`), у `VRAM12-release*`/`VRAM16-release*` `upscale: null`; тарифы проверены замером (`docs/bench/vram-tiers.md`) |
 
 ## 7. Как добавить бэкенд (модель генерации, апскейла или энкодера)
 

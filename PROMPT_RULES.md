@@ -231,8 +231,8 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --dry-run \
 ### 9.1 `--preview` — это режим, а не пресет
 
 `--preview` не подменяет пресет: он включает черновой режим внутри выбранного (`preview: true` ->
-480p и 8 шагов, `RunConfig.is_preview`). Отдельного пресета `preview` (FLUX.2) в наборе больше нет,
-и флаг его не подразумевает — проверено `--dry-run`:
+480p и 8 шагов, `RunConfig.is_preview`). Отдельного пресета `preview` (бывший FLUX.2) в наборе
+больше нет, и флаг его не подразумевает — проверено `--dry-run`:
 
 ```text
 $ python -m qwenstyle run --dry-run --preview ... --prompt-file prompts/exp3.txt
@@ -244,8 +244,8 @@ $ python -m qwenstyle run --dry-run --preview ... --prompt-file prompts/exp3.txt
 - для быстрых итераций — `--preview` (480p, 8 шагов) поверх любого пресета;
 - LoRA в `base` по умолчанию выключена (`lora.scale: 0`), поэтому для FUSAL-промта добавь
   `--lora-scale 0.7`: это бесплатная ось, кэш эмбеддингов не инвалидируется (`AGENTS.md` §5.6);
-- если флаги не нужны, есть готовые стилевые черновики `strong-preview-anime` /
-  `flagship-preview-anime` (768p, 8 шагов, `lora 0.7`).
+- если флаги не нужны, есть готовые стилевые черновики `VRAM12-preview-anime` /
+  `VRAM16-preview-anime` (768p, 8 шагов, `lora 0.7`).
 
 ---
 

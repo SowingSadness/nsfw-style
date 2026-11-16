@@ -3,7 +3,7 @@
 Локальная стилизация, правка и генерация изображений на **Qwen-Image-2.1**: переносит вашу картинку
 в выбранный стиль (img2img с сохранением композиции), правит её по инструкции и генерирует кадры с
 нуля; инференс полностью локальный — изображение никуда не уходит, начиная с 8 ГБ VRAM (профили
-`weak`/`strong`/`flagship`).
+`VRAM8`/`VRAM12`/`VRAM16`).
 
 Стиль — это выбор: аниме-адаптер FUSAL R80 включают пресеты с суффиксом `-anime` (и флаг
 `--lora-scale`), пресеты без суффикса работают без стилевого адаптера (`lora 0`) и просто следуют
@@ -15,7 +15,7 @@
 > под их собственными лицензиями — ответственность за использование лежит на вас.
 
 Требования: Python **3.12**, CUDA-сборка torch (Linux/Windows, ставится установочным скриптом),
-VRAM/RAM/диск — по профилю машины (см. таблицы ниже: 8 ГБ VRAM / 16 ГБ RAM — минимум для `weak`).
+VRAM/RAM/диск — по профилю машины (см. таблицы ниже: 8 ГБ VRAM / 16 ГБ RAM — минимум для `VRAM8`).
 
 ## Quick start
 
@@ -24,20 +24,20 @@ VRAM/RAM/диск — по профилю машины (см. таблицы н�
 Windows:
 
 ```bat
-bootstrap.cmd -Profile strong
+bootstrap.cmd -Profile VRAM12
 ```
 
 Linux / macOS:
 
 ```bash
-./bootstrap.sh strong
+./bootstrap.sh VRAM12
 ```
 
 Скрипт делает всё по шагам: создаёт `.venv`, ставит пакет с CUDA-индексом torch, печатает план
 загрузки моделей профиля (репозиторий → компоненты → ГиБ → лицензия → нужен ли `HF_TOKEN`),
 скачивает их, запускает `env` и `selftest`, затем печатает готовую команду `gen`.
 Проверить доступ к весам **без скачивания** (по одному маленькому файлу на репозиторий):
-`bootstrap.cmd -Profile strong -Check` (Linux: `./bootstrap.sh strong --check`).
+`bootstrap.cmd -Profile VRAM12 -Check` (Linux: `./bootstrap.sh VRAM12 --check`).
 План без установки и загрузки: `-DryRun` / `--dry-run`.
 
 ### 2. Положите промт и референсы
@@ -59,7 +59,7 @@ prompts/
 ### 3. Сгенерируйте
 
 ```bash
-python -m qwenstyle gen --preset strong --prompt my-scene --count 4
+python -m qwenstyle gen --preset VRAM12 --prompt my-scene --count 4
 ```
 
 Вместо `--count 4` можно перечислить сиды: `--seeds 84,32-38`. Если не указать ни то, ни другое —
@@ -79,13 +79,13 @@ out/my-scene/gen-20261115-1940/
 
 ```text
 [gen] сессия out/my-scene/gen-20261115-1940
-[gen] пресет strong-release · backend qwen_image21 · 25 шагов · lora 0 · энкодер heretic
+[gen] пресет VRAM12-release · backend qwen_image21 · 25 шагов · lora 0 · энкодер heretic
 [gen] промт prompts/my-scene/prompt.txt (md5 4819c8e1ddc4)
 [gen] референсов 1: image1.png
 [gen] сиды 4: <четыре случайных сида печатаются здесь>
 [plan] input prompts/my-scene/image1.png (768x768, 1 референс) -> crop 960x960
-[plan] upscale esrgan factor=1.5 target_height=1440 -> out 1440x1440
-[gen] seed <N>: <время>s 960x960 peak 6.4 GiB
+[plan] upscale пропущен: апскейл выключен (factor=0) -> out 960x960
+[gen] seed <N>: <время>s 960x960 peak 6.2 GiB
 [gen] итог: 4 кадр(ов) в out/my-scene/gen-20261115-1940 · всего <сумма>s · среднее <…>s/кадр
 ```
 
@@ -101,7 +101,7 @@ out/my-scene/gen-20261115-1940/
 | `Qwen/Qwen-Image-2.1-Turbo` | distill-трансформер (8 шагов); энкодер и VAE берутся из base | Apache-2.0 | нет |
 | `MicksHF/Qwen-Image-2.1-Anime-Fusal` | адаптеры FUSAL: R80 (base) и Turbo E6 R128 | лицензия в карточке репозитория | нет |
 | `DreamFast/Qwen3-VL-8B-Heretic-1.3.0` | текст-энкодер heretic 8B (16.33 ГиБ bf16) — **умолчание** | Apache-2.0 | **да** |
-| `MiniMaxAI/MiniMax-H3-Image` | 33.13B, 6 шагов PDD, T2I и edit (только профиль `flagship`) | MiniMax H3 Community License | нет |
+| `MiniMaxAI/MiniMax-H3-Image` | 33.13B, 6 шагов PDD, T2I и edit (профиль `VRAM16`) | MiniMax H3 Community License | нет |
 | `llmfan46/Qwen3-VL-32B-Instruct-ultra-uncensored-heretic` | 32B-энкодер для H3-Image (62.14 ГиБ bf16) | Apache-2.0 | нет |
 
 Gated-репозиторий (`DreamFast/Qwen3-VL-8B-Heretic-1.3.0`) требует принять лицензию на сайте
@@ -109,34 +109,37 @@ HuggingFace и передать токен: `export HF_TOKEN=…` (PowerShell: `
 `models download`/`--probe` возвращают код 2 с подсказкой.
 
 Не в публичных профилях (только для разработки, см. [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)):
-FLUX.2 klein — у него **FLUX Non-Commercial License v2.1** (только некоммерческое использование),
-SeedVR2-3B — апскейлер, который пока не доведён до стабильного состояния.
+бекенд FLUX.2 klein — у него **FLUX Non-Commercial License v2.1** (только некоммерческое
+использование; пресетов в наборе нет) — и SeedVR2-3B, апскейлер, который пока не доведён
+до стабильного состояния.
 
 ## Ваша машина → профиль → одна команда
 
 | машина | профиль | диск | целевой кадр | загрузка моделей | первый прогон |
 |---|---|---|---|---|---|
-| 8 ГБ VRAM / 16 ГБ RAM | **weak** | ≈ 75 ГиБ | 1080p | `python -m qwenstyle models download --profile weak --yes` | `python -m qwenstyle gen --preset weak --prompt my-scene --count 4` |
-| 16 ГБ VRAM / 32 ГБ RAM | **strong** | ≈ 55 ГиБ | 1440p | `python -m qwenstyle models download --profile strong --yes` | `python -m qwenstyle gen --preset strong --prompt my-scene --count 4` |
-| 16 ГБ VRAM / 64 ГБ RAM | **flagship** | ≈ 181 ГиБ | 4K UHD | `python -m qwenstyle models download --profile flagship --yes` | `python -m qwenstyle gen --preset flagship --prompt my-scene --count 4` |
+| 8 ГБ VRAM / 16 ГБ RAM | **VRAM8** | ≈ 75 ГиБ | 1080p | `python -m qwenstyle models download --profile VRAM8 --yes` | `python -m qwenstyle gen --preset VRAM8 --prompt my-scene --count 4` |
+| 12 ГБ VRAM / 32 ГБ RAM | **VRAM12** | ≈ 55 ГиБ | 960p native (1440 — `--upscale 1.5`) | `python -m qwenstyle models download --profile VRAM12 --yes` | `python -m qwenstyle gen --preset VRAM12 --prompt my-scene --count 4` |
+| 16 ГБ VRAM / 64 ГБ RAM | **VRAM16** | ≈ 181 ГиБ | 1440p native; 2160 — `4k-fast`/`r3-*` | `python -m qwenstyle models download --profile VRAM16 --yes` | `python -m qwenstyle gen --preset VRAM16 --prompt my-scene --count 4` |
 
 Профиль — это данные ([`qwenstyle/profiles.py`](qwenstyle/profiles.py)): список репозиториев,
 адресованные пресеты, след на диске и целевая высота кадра. План без скачивания:
-`python -m qwenstyle models download --profile strong --dry-run`; проверка доступа без полной
+`python -m qwenstyle models download --profile VRAM12 --dry-run`; проверка доступа без полной
 загрузки: `--probe`.
 
 Чем профили отличаются по существу:
 
-- `weak` — энкодер работает **на CPU** с диск-стримингом весов (90–111 с на новую пару «промт +
+- `VRAM8` — энкодер работает **на CPU** с диск-стримингом весов (90–126 с на новую пару «промт +
   картинка + сетка»). Черновик `*-preview` — 480p и 8 шагов без апскейла, финал `*-release` — 640p
   (в `-anime` — базовая модель с FUSAL 0.7 и 25 шагов) + ESRGAN до 1080p; без суффикса `-anime`
   оба этапа идут на Turbo (8 шагов). Первая правка промта дорогая, дальше всё берётся из кэша
   эмбеддингов.
-- `strong` — энкодер на GPU (`device: auto` → `cuda` + конвейер стриминга, 5–6 с), 768p черновик /
-  960p финал + ESRGAN до 1440p. LoRA FUSAL по умолчанию выключена (`lora 0`), anime-пресеты
-  включают её на 0.7.
-- `flagship` — то же железо, но 64 ГБ RAM: добавляются MiniMax-H3-Image (33.13B, T2I + edit) и
-  32B heretic-энкодер, финал — 1440p native или быстрый 1088p → 4K UHD. На 32 ГБ RAM этого
+- `VRAM12` — энкодер на GPU (`device: auto` → `cuda` + конвейер стриминга, 15–16 с), 768p черновик
+  с `offload: group` / 960p финал **native без апскейла** (`upscale: null`); KV префикса в RAM
+  (`kv_cache: offload`) — так профиль честно влезает в 12 ГиБ. LoRA FUSAL по умолчанию выключена
+  (`lora 0`), anime-пресеты включают её на 0.7.
+- `VRAM16` — то же железо, но 64 ГБ RAM: добавляются MiniMax-H3-Image (33.13B, T2I + edit) и
+  32B heretic-энкодер, финал — 1440p native (`upscale: null`), 4K — `VRAM16-4k-fast` (1088p →
+  ESRGAN 2160) или `VRAM16-r3-*` (3 референса → 2160). На 32 ГБ RAM этого
   профиля нет: H3 держит 30.9 ГиБ fp8-трансформера в RAM при групповом offload.
 
 Как читаются веса энкодера при стриминге: по заголовку safetensors вычисляется точное смещение
@@ -156,16 +159,17 @@ page cache — медленнее (6.5–8.1 против 19.5–21.2 ГиБ/с)
 
 ```text
 python -m qwenstyle gen [--preset PRESET] [--prompt NAME] [--seeds SPEC | --count N]
-                        [--aspect R] [--set KEY=VALUE] [--dry-run] [--no-logs]
+                        [--aspect R] [--upscale F|null] [--set KEY=VALUE] [--dry-run] [--no-logs]
 ```
 
 | флаг | что делает |
 |---|---|
-| `--preset` | профиль/пресет. Шорткаты: `weak`/`strong`/`flagship` = `<family>-release`; `strong-preview`, `strong-release`, `strong-preview-anime`, `strong-release-anime`, `strong-anime` = `strong-release-anime`; `flagship-4k-fast`; либо точное имя любого пресета из `qwenstyle/presets/` |
+| `--preset` | тариф/пресет. Шорткаты: `VRAM8`/`VRAM12`/`VRAM16` = `<тариф>-release`; `VRAM12-preview`, `VRAM12-release`, `VRAM12-preview-anime`, `VRAM12-release-anime`, `VRAM12-anime` = `VRAM12-release-anime`; `VRAM16-4k-fast`; либо точное имя любого пресета из `qwenstyle/presets/` |
 | `--prompt NAME` | папка `prompts/NAME/`: `prompt.txt` (текст) + `image*.png\|jpg\|jpeg\|webp` (до 10 референсов) |
 | `--count N` | N случайных сидов (печатаются), взаимоисключающе с `--seeds` |
 | `--seeds SPEC` | явные сиды: `84`, `32-38`, `1,7,42`; без обоих флагов — один случайный сид |
 | `--aspect R` | пропорция кадра (`16:9`, `4:3`, `1:1`) вместо пропорции первого референса; для T2I без флага — `1:1` |
+| `--upscale F\|null` | число — множитель апскейла (`target_height` пресета главнее); `null`/`none`/`off` — выключить апскейл целиком (native-кадр, без `s{N}-gen.png`) |
 | `--set KEY=VALUE` | точечный параметр `RunConfig` (можно повторять); неизвестный ключ отбивается кодом 2 со списком допустимых параметров бекенда |
 | `--dry-run` | только план: сетка, ключ кэша эмбеддингов, будет ли энкод, апскейл, папка сессии; веса не грузятся |
 | `--no-logs` | не писать `run.log` в папку сессии (кадры и `meta.json` остаются) |
@@ -183,47 +187,58 @@ python -m qwenstyle gen [--preset PRESET] [--prompt NAME] [--seeds SPEC | --coun
 
 ## Пресеты и измеренное время кадра
 
-13 публичных пресетов. Имя с `-anime` включает адаптер FUSAL; без него стиль не навязывается.
-Полная таблица (включая размеры PNG и разбор «первый прогон против повторного») —
-[`docs/bench/presets.md`](docs/bench/presets.md); там же условия замера.
+15 публичных пресетов: `VRAM8-*` (4), `VRAM12-*` (4), `VRAM16-*` (7). Имя с `-anime` включает
+адаптер FUSAL; без него стиль не навязывается. Полная таблица (включая размеры PNG и разбор
+«первый прогон против повторного») — [`docs/bench/presets.md`](docs/bench/presets.md); там же
+условия замера; влезаемость тарифов проверена отдельно — [`docs/bench/vram-tiers.md`](docs/bench/vram-tiers.md).
 
 Условия: **RTX 4080 16 ГБ VRAM / 63.6 ГБ RAM**, Windows 11, torch 2.8.0+cu129, `HF_HUB_OFFLINE=1`,
 прогретый page cache весов, `seed=1`, один квадратный референс 768×768. Поэтому все сетки ниже
 квадратные: 480×480, 640×640, 960×960… На референсе 16:9 того же размера сетка больше по площади
 в 1.78×, и время генерации растёт примерно пропорционально числу токенов (например
-`flagship-release` 1440p 16:9 — около 7 минут, а не 88 с).
+`VRAM16-release` 1440p 16:9 — 205 с вместо 96 с).
 
-| пресет | native | итоговый кадр | время кадра, s | пик VRAM, ГиБ |
-|---|---|---|---|---|
-| `weak-preview` | 480p | 480×480 | 113 (энкод CPU cold) | 4.1 |
-| `weak-release` | 640p | 1080×1080 | 133 (энкод CPU cold) | 5.0 |
-| `weak-preview-anime` | 480p | 480×480 | 22 | 4.1 |
-| `weak-release-anime` | 640p | 1080×1080 | 26 | 4.9 |
-| `strong-preview` | 768p | 768×768 | 24 | 13.1 |
-| `strong-release` | 960p | 1440×1440 | 51 | 6.4 |
-| `strong-preview-anime` | 768p | 768×768 | 21 | 11.5 |
-| `strong-release-anime` | 960p | 1440×1440 | 45 | 6.4 |
-| `flagship-preview` | 768p | 768×768 | 19 | 11.5 |
-| `flagship-preview-anime` | 768p | 768×768 | 19 | 11.5 |
-| `flagship-release` | 1440p | 2160×2160 | 106 | 13.9 |
-| `flagship-release-anime` | 1440p | 2160×2160 | 100 | 13.9 |
-| `flagship-4k-fast` | 1088p | 2160×2160 | 61 | 7.3 |
+| пресет | тариф VRAM / RAM | native | итоговый кадр | время кадра, s | пик VRAM, ГиБ |
+|---|---|---|---|---|---|
+| `VRAM8-preview` | 8 ГБ / 16 ГБ | 480p | 480×480 | 113 (энкод CPU cold) | 4.1 |
+| `VRAM8-release` | 8 ГБ / 16 ГБ | 640p | 1080×1080 | 150 (энкод CPU cold) | 5.0 |
+| `VRAM8-preview-anime` | 8 ГБ / 16 ГБ | 480p | 480×480 | 22 | 4.1 |
+| `VRAM8-release-anime` | 8 ГБ / 16 ГБ | 640p | 1080×1080 | 26 | 4.9 |
+| `VRAM12-preview` | 12 ГБ / 32 ГБ | 768p | 768×768 | 39 (энкод GPU cold) | 3.9 |
+| `VRAM12-release` | 12 ГБ / 32 ГБ | 960p | 960×960 native | 71 (энкод GPU cold) | 4.5 |
+| `VRAM12-preview-anime` | 12 ГБ / 32 ГБ | 768p | 768×768 | 24 | 3.9 |
+| `VRAM12-release-anime` | 12 ГБ / 32 ГБ | 960p | 960×960 native | 49 | 4.5 |
+| `VRAM16-preview` | 16 ГБ / 64 ГБ | 768p | 768×768 | 21 | 10.3 |
+| `VRAM16-preview-anime` | 16 ГБ / 64 ГБ | 768p | 768×768 | 21 | 10.3 |
+| `VRAM16-release` | 16 ГБ / 64 ГБ | 1440p | 1440×1440 native | 125 (энкод GPU cold) | 6.2 |
+| `VRAM16-release-anime` | 16 ГБ / 64 ГБ | 1440p | 1440×1440 native | ≈125 | ≈6.2 |
+| `VRAM16-4k-fast` | 16 ГБ / 64 ГБ | 1088p | 2160×2160 | 80 | 4.7 |
+| `VRAM16-r3-169` | 16 ГБ / 64 ГБ | 912p + 16:9 | 3934×2160 | — (3 референса, не мерялось) | — |
+| `VRAM16-r3-43` | 16 ГБ / 64 ГБ | 1056p + 4:3 | 2880×2160 | — (3 референса, не мерялось) | — |
 
 Что читается из таблицы:
 
 - **Время кадра** — весь процесс от старта до сохранённого PNG (`[done] … total`), включая загрузку
-  модели и энкод. Апскейл дешёвый: 0.4–1.9 с на кадр вплоть до 2160×2160.
+  модели и энкод. Апскейл дешёвый: 0.4–1.3 с на кадр вплоть до 2160×2160.
 - **`-anime` = LoRA FUSAL 0.7** и по времени бесплатен: разница с пресетами без `-anime` — в пределах шума
   (LoRA меняет веса трансформера, а не число шагов). Черновики — 8 шагов, релизы — 25.
-- **Черновики дешёвые, финалы — нет**: `flagship-preview` (768p, 8 шагов) — 19 с против 106 с у
-  `flagship-release` (1440p, 25 шагов); `flagship-4k-fast` даёт тот же 2160×2160 за 61 с ценой
+- **Черновики дешёвые, финалы — нет**: `VRAM16-preview` (768p, 8 шагов) — 21 с против 125 с у
+  `VRAM16-release` (1440p, 25 шагов); `VRAM16-4k-fast` даёт 2160×2160 за 80 с ценой
   синтетической текстуры от ESRGAN ×1.985.
-- **`offload: group` виден по пику VRAM, а не по времени**: `strong-preview` (768p без offload) —
-  13.1 ГиБ, `strong-release` (960p с offload) — 6.4 ГиБ, потому что без offload 960p не влезает.
-- **Первый прогон против повторного** (та же пара «промт + картинка», новый процесс): `weak-preview`
-  113 → 22 с (−91 с, энкод был 90 с), `strong-release` 51 → 47 с, `flagship-release` 106 → 101 с.
-  Критичен кэш эмбеддингов только для `weak-*` (CPU-энкод); у `strong-*`/`flagship-*` GPU-энкод —
-  5–6 с, то есть меньше 10 % прогона.
+- **`offload: group` виден по пику VRAM, а не по времени**: `VRAM12-preview` (768p с offload) —
+  3.9 ГиБ / 10.3 с, `VRAM16-preview` (тот же кадр без offload) — 10.3 ГиБ / 8.2 с.
+- **Первый прогон против повторного** (та же пара «промт + картинка», новый процесс): `VRAM8-preview`
+  113 → 22 с (−91 с, энкод был 90 с), `VRAM12-preview` 39 → 24 с, `VRAM12-release` 71 → 49 с.
+  Критичен кэш эмбеддингов только для `VRAM8-*` (CPU-энкод 90–126 с); у `VRAM12-*`/`VRAM16-*`
+  GPU-энкод — 15–16 с, то есть 15–20 % прогона.
+
+**Выключатель апскейла.** `upscale: null` в пресете или `--upscale=null` в `run`/`gen` выключает
+апскейл **целиком**: кадр отдаётся native, пары `s{N}-gen.png` не появляется (именно так работают
+`VRAM12-release*` и `VRAM16-release*`). `factor: 0` сам по себе апскейл **не выключает** —
+`target_height` пресета главнее, поэтому `--upscale 0` при `upscale.target_height: 1440` всё равно
+гонит ESRGAN (1440 / 1088 → ×1.32); выключить — `--upscale=null` или
+`--set upscale.target_height=0`. Пары `s{N}-gen.png` появляются только при включённом апскейле:
+u `VRAM8-release*`, `VRAM16-4k-fast`, `VRAM16-r3-*` и при явном `--upscale F`.
 
 ## KV-кеш референсов (`kv_cache`)
 
@@ -265,7 +280,7 @@ python -m qwenstyle gen [--preset PRESET] [--prompt NAME] [--seeds SPEC | --coun
 
 | что | где | можно ли чистить |
 |---|---|---|
-| кэш эмбеддингов промта и картинок | `cache/embeds/` (`embeds_<md5>_<sha>_<тег>_<W>x<H>.pt` + `.json`, `text_embeds_…` для FLUX.2/H3) | **да**: `python -m qwenstyle cache prune …` (без `--apply` — только план), плюс автоматическое вытеснение политикой `cache_supersede` (умолчание `pair`: сменил промт или картинку → старые записи этой пары удаляются отложенно в конце прогона) |
+| кэш эмбеддингов промта и картинок | `cache/embeds/` (`embeds_<md5>_<sha>_<тег>_<W>x<H>.pt` + `.json`; `text_embeds_…` — у моделей с внутренним conditioning) | **да**: `python -m qwenstyle cache prune …` (без `--apply` — только план), плюс автоматическое вытеснение политикой `cache_supersede` (умолчание `pair`: сменил промт или картинку → старые записи этой пары удаляются отложенно в конце прогона) |
 | кэш моделей: fp8-квантование и локальные веса | `cache/models/` — `fp8_transformer*` (base / turbo / flux2 / h3_image) и `weights/` (энкодеры heretic 8B/32B, ESRGAN) | **нет**: не вытесняется никогда; пересборка квантования — только `--rebuild-fp8-cache` |
 | исходные веса моделей | `hf-cache/` (`HF_HOME`), каноническая раскладка `blobs/` + симлинки `snapshots/<commit>/` | вручную, если не нужны |
 
@@ -281,8 +296,8 @@ python -m qwenstyle gen [--preset PRESET] [--prompt NAME] [--seeds SPEC | --coun
   G:\Work\nsfw-style свободно 116.9 GiB из 931.5 GiB
 ```
 
-Сколько занимает профиль целиком (загрузка + производные кэши): `weak` ≈ 75 ГиБ, `strong` ≈ 55 ГиБ,
-`flagship` ≈ 181 ГиБ — эти числа печатает и `models download --profile … --dry-run`.
+Сколько занимает профиль целиком (загрузка + производные кэши): `VRAM8` ≈ 75 ГиБ, `VRAM12` ≈ 55 ГиБ,
+`VRAM16` ≈ 181 ГиБ — эти числа печатает и `models download --profile … --dry-run`.
 
 Как удалить скачанное: отдельной команды «стереть всё» нет, потому что кеши разделены по смыслу.
 Удалить кэш эмбеддингов — `python -m qwenstyle cache prune --all --apply` (или просто удалить
@@ -296,8 +311,9 @@ python -m qwenstyle gen [--preset PRESET] [--prompt NAME] [--seeds SPEC | --coun
 1. **fp8-квантование трансформера** (`cache/models/fp8_transformer*`): bf16 → fp8 каст в base-профиле —
    ≈26 с каста + ≈14 с записи 6.7 ГиБ, у H3-Image — 202.8 с на 30.9 ГиБ. Второй старт читает готовый
    кэш (0.4–0.6 с).
-2. **Эмбеддинги промта и картинок** (`cache/embeds`): `weak-*` — CPU-энкод 90–111 с на новую пару
-   «промт + картинка + сетка», `strong-*`/`flagship-*` — GPU-энкод 5–6 с; из кэша — 0 с.
+2. **Эмбеддинги промта и картинок** (`cache/embeds`): `VRAM8-*` — CPU-энкод 90–126 с на новую пару
+   «промт + картинка + сетка», `VRAM12-*`/`VRAM16-*` — GPU-энкод 15–16 с (стриминг весов энкодера);
+   из кэша — 0 с.
 
 Отсюда рабочий порядок: зафиксировать картинку и промт → подобрать всё на дешёвом черновике
 (`*-preview`, 8 шагов) → один финальный прогон. Любая правка текста промта, другой файл референса
@@ -306,19 +322,21 @@ python -m qwenstyle gen [--preset PRESET] [--prompt NAME] [--seeds SPEC | --coun
 
 Ограничения по железу (проверено):
 
-- **8 ГБ VRAM** — только профиль `weak` (групповой offload, энкодер на CPU). 768p без offload
-  и FLUX.2/H3 сюда не влезают.
-- **16 ГБ VRAM** — `strong`/`flagship`; 960p и 1440p требуют `offload: group` (в пресетах он уже
-  выставлен), без него 960p даёт OOM.
+- **8 ГБ VRAM** — только профиль `VRAM8` (групповой offload, энкодер на CPU). 768p без offload,
+  H3-Image сюда тоже не влезает.
+- **12 ГБ VRAM** — `VRAM12`: 768p черновик и 960p финал идут с `offload: group` и `kv_cache: offload`
+  (без них пик 11–16 ГиБ — это уже не 12 ГБ).
+- **16 ГБ VRAM** — `VRAM16`; 1440p требует `offload: group` (в пресетах он уже выставлен).
 - **32 ГБ RAM** — без H3-Image: групповой offload держит 30.9 ГиБ fp8-трансформера в RAM, поэтому
-  флагманскому профилю нужны 64 ГБ.
-- Нативный 1440p (25 шагов ≈ 7 минут) оправдан только для узких кадров: `flagship-4k-fast` даёт тот
-  же 4K вдвое дешевле, а `strong-release` — 1440p из 960p через ESRGAN.
+  `VRAM16` (`h3-image`) нужны 64 ГБ.
+- Нативный 1440p больше не добирается апскейлом: `VRAM16-release` отдаёт 2560×1440 как есть
+  (25 шагов — 205 с на 16:9, 96 с на квадрате); `VRAM16-4k-fast` даёт 2160 из 1088p вдвое-втрое
+  дешевле, а `VRAM12-release` — 960p native (1440 — явным `--upscale 1.5`).
 
 ## Проверка установки
 
 ```bash
-python -m qwenstyle selftest --profile strong
+python -m qwenstyle selftest --profile VRAM12
 ```
 
 `selftest` проверяет окружение (версии, CUDA, свободные VRAM/RAM/диск), наличие весов и
@@ -345,7 +363,7 @@ fp8-кэша профиля и делает один дешёвый рендер
 
 ```powershell
 Get-ChildItem *.ps1 | Unblock-File
-powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1 -Profile strong
+powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1 -Profile VRAM12
 ```
 
 ## Правила написания промтов

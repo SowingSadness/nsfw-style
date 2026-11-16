@@ -19,31 +19,34 @@ FUSAL (R80 v2), img2img с сохранением композиции. Inferenc
 
 | железо | профиль | пресеты | диск | целевой рендер |
 |---|---|---|---|---|
-| 8 ГБ VRAM / 16 ГБ RAM | `weak` | `weak-preview`, `weak-release`, `weak-preview-anime`, `weak-release-anime` (480p/640p, энкодер **CPU** + диск-стриминг, `offload: group`) | ≈ 75 ГиБ | 1080p (ESRGAN ×1.69) |
-| 16 ГБ VRAM / 32 ГБ RAM | `strong` | `strong-preview`, `strong-release`, `strong-preview-anime`, `strong-release-anime` (768p без offload / 960p с `offload: group`, энкодер на GPU) | ≈ 55 ГиБ | 1440p (ESRGAN ×1.5) |
-| 16 ГБ VRAM / 64 ГБ RAM | `flagship` | `flagship-preview`, `flagship-preview-anime`, `flagship-release`, `flagship-release-anime`, `flagship-4k-fast` | ≈ 181 ГиБ | 4K UHD (2160) |
+| 8 ГБ VRAM / 16 ГБ RAM | `VRAM8` | `VRAM8-preview`, `VRAM8-release`, `VRAM8-preview-anime`, `VRAM8-release-anime` (480p/640p, энкодер **CPU** + диск-стриминг, `offload: group`) | ≈ 75 ГиБ | 1080p (ESRGAN ×1.69) |
+| 12 ГБ VRAM / 32 ГБ RAM | `VRAM12` | `VRAM12-preview`, `VRAM12-release`, `VRAM12-preview-anime`, `VRAM12-release-anime` (768p с `offload: group` / 960p native без апскейла, энкодер на GPU, `kv_cache: offload`) | ≈ 55 ГиБ | 960p native (1440 — `--upscale 1.5`) |
+| 16 ГБ VRAM / 64 ГБ RAM | `VRAM16` | `VRAM16-preview`, `VRAM16-preview-anime`, `VRAM16-release`, `VRAM16-release-anime`, `VRAM16-4k-fast`, `VRAM16-r3-169`, `VRAM16-r3-43` | ≈ 181 ГиБ | 1440p native; 2160 — `4k-fast`/`r3-*` |
 
 Аниме — опция: ветки `*-anime` включают адаптер FUSAL 0.7; пресеты без суффикса работают без
 стилевого адаптера.
 
 Референсы и память: все публичные пресеты наследуют `presets/base.yaml`, где
 `generation.kv_cache: auto-offload-ref2` — то есть **один референс = K/V в VRAM (быстро), 2+ =
-K/V в RAM (иначе OOM)**, цифры и порог — §4 «Префиксный KV-кеш». Переопределение:
-`--set generation.kv_cache=true|offload|false|auto-offload-ref2`.
+K/V в RAM (иначе OOM)**. `VRAM12-*` и `VRAM16-*` пинят `kv_cache: offload` явно: при 960p/1440p
+префикс занимает 3.2–7.1 ГиБ VRAM (16:9) и выбивает тариф (бит-в-бит, +13 % времени; `VRAM12-release` —
+−3.07 ГиБ / +4 %). Замеры: [`docs/bench/vram-tiers.md`](docs/bench/vram-tiers.md) (тарифы),
+[`docs/bench/kv-cache-offload.md`](docs/bench/kv-cache-offload.md) (режимы, случай `nita-camp`).
+Переопределение: `--set generation.kv_cache=true|offload|false|auto-offload-ref2`.
 
 Жёсткие правила рекомендаций:
 
-- **8 ГБ VRAM — только `weak-*`**: там энкодер идёт на CPU (`encoder.device: cpu` + `stream: true`) и
-  везде включён `offload: group`. 960p/1440p, FLUX.2 и H3-Image этой машине не советовать.
-- **32 ГиБ RAM — не советовать H3-Image** (`h3-image`, флагманский профиль): групповой offload держит
+- **8 ГБ VRAM — только `VRAM8-*`**: там энкодер идёт на CPU (`encoder.device: cpu` + `stream: true`) и
+  везде включён `offload: group`. 960p/1440p, бекенд FLUX.2 и H3-Image этой машине не советовать.
+- **32 ГиБ RAM — не советовать H3-Image** (`h3-image`, профиль `VRAM16`): групповой offload держит
   30.9 ГиБ fp8-трансформера в RAM, на 32 ГиБ это упирается в спилл.
 - **Дефолтный энкодер — `heretic`** (`encoder.name: heretic`, `cache_tag: heretic`): только на его
   conditioning LoRA обучалась. `base` — осознанным флагом (`--text-encoder base` или
   `--set encoder.name=base`), и это другой ключ кэша (тег `_te-heretic` в имени файла).
 - **Новый пресет обязан попасть в профиль** — в `presets=…` (и при необходимости в `repos`/`disk_gib`)
   `qwenstyle/profiles.py`; иначе он существует только для разработки и должен быть помечен dev-only
-  в `docs/DEVELOPMENT.md`. Публичные имена — `<family>-<stage>[-anime]`; `gen --preset` разрешает
-  шорткаты (`strong` = `strong-release`, `strong-anime` = `strong-release-anime`).
+  в `docs/DEVELOPMENT.md`. Публичные имена — `<тариф>-<stage>[-anime]` (`VRAM8`/`VRAM12`/`VRAM16`);
+  `gen --preset` разрешает шорткаты (`VRAM12` = `VRAM12-release`, `VRAM12-anime` = `VRAM12-release-anime`).
 - **Проверка установки — `selftest`**, а не эталоны кадров: `python -m qwenstyle selftest --profile
   <имя>` (окружение → веса профиля → один рендер 480p/4 шага). `models download --profile … --probe`
   проверяет доступ к весам без полной загрузки.
@@ -136,7 +139,7 @@ MiniMax-H3-Image: T2I + edit на модульном пайплайне diffuser
 команда не правит ядро. Минимальный контракт:
 
 ```
-python -m qwenstyle gen --preset strong --prompt <имя> [--seeds 84,32-38 | --count N]
+python -m qwenstyle gen --preset VRAM12 --prompt <имя> [--seeds 84,32-38 | --count N]
                                 # главная точка входа: папка prompts/<имя>/ (prompt.txt + image*)
                                 # -> out/<имя>/gen-YYYYMMDD-HHMM/ (кадры, run.log, meta.json в корне)
                                 # --dry-run — план без весов; --no-logs — без run.log
@@ -145,7 +148,7 @@ python -m qwenstyle run [--preview | --size 768p | --resolution N] [--aspect 16:
                                 # --input необязателен: нужен ли референс, решает `Capabilities.requires_image`
                                 # --dry-run (план без весов)
                                 # лог: <кадр>/run.log + meta.json рядом с кадром; --no-logs — не создавать
-python -m qwenstyle selftest --profile weak|strong|flagship   # установка: окружение, веса профиля, рендер 480p/4 шага
+python -m qwenstyle selftest --profile VRAM8|VRAM12|VRAM16   # установка: окружение, веса профиля, рендер 480p/4 шага
 python -m qwenstyle env         # версии, CUDA/GPU/VRAM/RAM, offline-режим, счётчики кэшей, свободный диск
 python -m qwenstyle models list|probe <repo> [--offline]   # реестр бекендов и зондирование без скачивания
 python -m qwenstyle models download --profile <имя> [--dry-run] [--probe] [--yes]   # план/проверка доступа/загрузка
@@ -161,17 +164,29 @@ hf cache verify <repo>                                  # целостность
 ```
 
 Пресеты — `qwenstyle/presets/*.yaml`, только данные (`extends:` = deep-merge, без кода), читаются
-через `RunConfig.from_profile(<имя>)`. **Публичные (13)** — `weak-*` / `strong-*` (по 4) и 5
-флагманских; они адресуются профилем машины (`profiles.py`, §0) и только они попадают в README.
-Остальные — dev-пресеты (см. `docs/DEVELOPMENT.md`), публичные шаги на их имена не опираются:
+через `RunConfig.from_profile(<имя>)`. **Публичные (15)** — `VRAM8-*` (4), `VRAM12-*` (4) и
+`VRAM16-*` (7, включая `4k-fast` и `r3-*`); они адресуются профилем машины (`profiles.py`, §0)
+и только они попадают в README. Остальные — dev-пресеты (см. `docs/DEVELOPMENT.md`), публичные шаги
+на их имена не опираются:
 
 | пресет | что это | модель / шаги / кэш точности |
 |---|---|---|
-| `base` | профиль по умолчанию: R80 v2 | `Qwen/Qwen-Image-2.1`, 25 шагов, fp8, `cache/fp8_transformer` |
-| `turbo` | distill-профиль | transformer из `Qwen/Qwen-Image-2.1-Turbo` + Turbo E6 R128 LoRA, 8 шагов (расписание `sample_sigmas`), `cache/fp8_transformer_turbo` |
-| `h3-image` | MiniMax-H3-Image: T2I и edit одним пайплайном | `MiniMaxAI/MiniMax-H3-Image` (33.13B), 6 шагов PDD, fp8 (30.9 GiB) + `offload: group`, `cache/fp8_transformer_h3_image`, LoRA нет, энкодер Qwen3-VL-32B (`h3qwen32-heretic`) |
-| `flagship-r3-169` | 3 референса, 16:9, максимум на 16 ГиБ | `extends: base`, `size_px: 912` + `aspect: 16:9` → crop 1632×896, 25 шагов, `offload: group`, ESRGAN ×2.41 → 3934×2160 |
-| `flagship-r3-43` | то же для 4:3 | `extends: base`, `size_px: 1056` + `aspect: 4:3` → crop 1408×1056, ESRGAN ×2.045 → 2880×2160 |
+| `VRAM8-preview`, `VRAM8-release` (+`-anime`) | черновик 480p / финал 640p → ESRGAN 1080 | `extends: turbo` (без `-anime`) или `base` + LoRA 0.7; энкодер **CPU** + диск-стриминг, `offload: group`, `cache/fp8_transformer_turbo` / `fp8_transformer` |
+| `VRAM12-preview` (+`-anime`) | 768p, 8 шагов | `extends: base`, `offload: group`, `kv_cache: offload`, `cache/fp8_transformer` |
+| `VRAM12-release` (+`-anime`) | 960p native, 25 шагов, `upscale: null` | то же; 1440 — `--upscale 1.5` |
+| `VRAM16-preview` (+`-anime`) | 768p, 8 шагов, `offload: none` | `extends: base`, `kv_cache: offload` |
+| `VRAM16-release` (+`-anime`) | 1440p native, 25 шагов, `upscale: null` | `offload: group`, `kv_cache: offload`; 4K — `--upscale 1.5` |
+| `VRAM16-4k-fast` | 1088p → ESRGAN ×1.985 → 3812×2160 | 25 шагов, `offload: group`, `kv_cache: offload` |
+| `VRAM16-r3-169` | 3 референса, 16:9, максимум на 16 ГиБ | `size_px: 912` + `aspect: 16:9` → crop 1632×896, 25 шагов, `offload: group`, ESRGAN ×2.41 → 3934×2160 |
+| `VRAM16-r3-43` | то же для 4:3 | `size_px: 1056` + `aspect: 4:3` → crop 1408×1056, ESRGAN ×2.045 → 2880×2160 |
+| `base` | dev: профиль по умолчанию | `Qwen/Qwen-Image-2.1`, 25 шагов, fp8, `cache/fp8_transformer` |
+| `turbo` | dev: distill-профиль (база `VRAM8-*`) | transformer из `Qwen/Qwen-Image-2.1-Turbo` + Turbo E6 R128 LoRA, 8 шагов (расписание `sample_sigmas`), `cache/fp8_transformer_turbo` |
+| `h3-image` | dev: MiniMax-H3-Image, T2I и edit одним пайплайном | `MiniMaxAI/MiniMax-H3-Image` (33.13B), 6 шагов PDD, fp8 (30.9 GiB) + `offload: group`, `cache/fp8_transformer_h3_image`, LoRA нет, энкодер Qwen3-VL-32B (`h3qwen32-heretic`) |
+
+`kv_cache`: в `base` — `auto-offload-ref2` (один референс → VRAM, 2+ → RAM), а в `VRAM12-*`
+и `VRAM16-*` — `offload` (KV в RAM: при 960p/1440p он занимает 3.2–7.1 ГиБ VRAM на 16:9 и выбивает тариф).
+Замеры — [`docs/bench/kv-cache-offload.md`](docs/bench/kv-cache-offload.md), влезаемость по тарифам —
+[`docs/bench/vram-tiers.md`](docs/bench/vram-tiers.md).
 
 Пресетов FLUX.2 (`flux2`, `preview`, `demo`, `full-flux2`) в наборе больше нет: бекенд
 `backends/flux2.py` остался, но пресеты удалены вместе с остальными dev-надстройками
@@ -873,20 +888,24 @@ done
 4. Тёплый цикл — `[done] total 29 s` (T2I) / 34 s (edit) против 96–99 s (T2I с готовым кэшем
    `text_embeds`) и 201 s холодного edit — кадры сравнивать сериями, а не по одному.
 
-**Правило размера финального кадра.** Финал 1440p = рендер **1080p** (1440×1088, 25 шагов
-**66–67 s**, `[done] total 75 s`) + ESRGAN ×1.32 до 1906×1440 — это связка
-`size_px: 1080` + `upscale.target_height: 1440`. Нативный 1440p (1920×1440, 10800 токенов) —
-**16–17 s/шаг** (25 шагов ≈ 7 мин, ×6.5 к 1080p) из-за спилла активаций: он оправдан только
-для узких кадров (<2.2 МП) и при свободной RAM (перед прогоном проверить `RAM available ≈ 49 GiB`,
-иначе s/шаг уходит в 70 — см. §4).
+**Правило размера финального кадра.** `VRAM12-release*` / `VRAM16-release*` больше не апскелят:
+`upscale: null` → native 1696×960 / 2560×1440. 4K — либо `VRAM16-4k-fast` / `VRAM16-r3-*`
+(1088p или 3 референса + ESRGAN до 2160), либо `--upscale 1.5` у release. Прежняя связка
+«1080p (1440×1088, 25 шагов **66–67 s**, `[done] total 75 s`) + ESRGAN ×1.32 до 1906×1440»
+работает через `--set upscale.target_height=1440`. Нативный 1440p (2560×1440, 10800 токенов)
+с `kv_cache: offload` идёт **8.2 s/шаг** (25 шагов — 205 s, пик 12.85 ГиБ,
+[`docs/bench/vram-tiers.md`](docs/bench/vram-tiers.md)); с KV в VRAM и без офлоада — 16–17 s/шаг
+из-за спилла активаций (§4).
 
-Апскейл **пропускается автоматически**, если кадр уже не ниже `upscale.target_height` или фактор
-≈ 1: бекенд не загружается, печатается `[post] upscale пропущен: …`, суффикс `-x1` в имени не
-появляется. ⚠️ `--upscale 0` **не отменяет** `upscale.target_height` из пресета (фактор считается
-из высоты: 1440 / 1088 → ×1.32), поэтому чистый кадр без поста — только с
-`--set upscale.target_height=0`.
+Апскейл включается и выключается блоком: `upscale: null` в пресете или `--upscale=null`
+в `run`/`gen` выключает его **целиком** (native-кадр, пары `s{N}-gen.png` нет). `factor: 0` сам по
+себе **не выключает**: `target_height` пресета главнее, поэтому `--upscale 0` при
+`upscale.target_height: 1440` всё равно гонит ESRGAN (1440 / 1088 → ×1.32); выключить —
+`--upscale=null` или `--set upscale.target_height=0`. Автоматический пропуск: если кадр уже не ниже
+`upscale.target_height` или фактор ≈ 1, бекенд не загружается, печатается
+`[post] upscale пропущен: …`, суффикс `-x1` в имени не появляется.
 
-Серия кадров по seed'ам — `python -m qwenstyle gen --preset strong --prompt <имя> --count 9`
+Серия кадров по seed'ам — `python -m qwenstyle gen --preset VRAM12 --prompt <имя> --count 9`
 (или `--seeds 0-9`): пайплайн грузится один раз, апскейл — после его выгрузки, имена
 `s{N}.png` (+ `s{N}-gen.png` чистая генерация), `run.log` и `meta.json` — в корне папки сессии.
 Эмбеддинги `gen` **не создаёт** — при промахе печатает готовую команду `run`.

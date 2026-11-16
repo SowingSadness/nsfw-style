@@ -10,8 +10,8 @@ fp8-кэш трансформера на диске, прогретый page cac
 
 Условия прогонов (одинаковые, кроме pin и текста промта):
 
-- пресет `strong-preview-anime` + `--set generation.offload=group` (в пресете `offload: none`,
-  `group` задаётся через `--set`);
+- пресет `VRAM12-preview-anime`: в нём уже `offload: group` и `kv_cache: offload`
+  (тогда была связка `offload: none` + `auto-offload-ref2`);
 - 768p на квадратном референсе → кадр **768×768**, `--resolution 768`, **8 шагов**, LoRA 0.7;
 - **1 референс** 768×768 (синтетический градиент), энкодер `heretic` (Qwen3-VL-8B, стриминг на GPU,
   `prefetch=4`), seed `1`;
@@ -20,7 +20,7 @@ fp8-кэш трансформера на диске, прогретый page cac
 
 ```bash
 PYTHONIOENCODING=utf-8 HF_HUB_OFFLINE=1 .venv/Scripts/python.exe -m qwenstyle gen \
-    --preset strong-preview-anime --set generation.offload=group \
+    --preset VRAM12-preview-anime \
     --prompt _pin --seeds 1                                        # A: pin по умолчанию (1)
 # B: то же + --set encoder.pin_memory=0 --prompt _pin2
 ```
