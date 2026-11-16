@@ -4,7 +4,7 @@
 Успех: `PASS` по каждому кейсу, `ALL PASS` и exit 0; провал: `FAIL <кейс>: ...` и exit 1.
 
 Зачем: `gen` — сессия из N кадров, и её цена считается кадрами, а не минутами. Ошибка в разборе
-сидов не падает: она делает лишние кадры (дорого), дубли (`s84.png` дважды) или — хуже — молча
+сидов не падает: она делает лишние кадры (дорого), дубли (`84-8.png` дважды) или — хуже — молча
 игнорирует `--seeds`, отдавая «случайный» набор вместо заказанного. Тест фиксирует контракт
 `qwenstyle/cmd/gen.py` без весов и генерации:
 
@@ -12,8 +12,8 @@
 2. `--count 3` -> три **разных** положительных сида;
 3. `--seeds` вместе с `--count` -> ошибка (`ConfigError`), а не тихий приоритет одного из них;
 4. ничего не задано -> ровно один случайный сид (он печатается в шапке сессии);
-5. повторы в `--seeds` убираются (один файл `s{N}.png` на сид);
-6. имя сессии — `gen-YYYYMMDD-HHMM`, при коллизии минуты — `-2`, `-3`; каталог не создаётся
+5. повторы в `--seeds` убираются (один файл `<seed>-<steps>.png` на сид);
+6. имя сессии — `<YYYYMMDDHHMM>-<tag>`, при коллизии минуты — `-2`, `-3`; каталог не создаётся
    (`--dry-run` не оставляет следов).
 """
 from __future__ import annotations
@@ -30,13 +30,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 sys.dont_write_bytecode = True                   # тест не должен оставлять __pycache__ в пакете
 
+from qwenstyle.cmd import _project as project     # noqa: E402
 from qwenstyle.cmd import gen as gen_cmd          # noqa: E402
 from qwenstyle.config import ConfigError          # noqa: E402
 
 #: Момент времени для детерминированных имён сессий (2026-11-15 19:40 по локальному времени).
 FIXED_NOW = time.strptime("20261115-1940", "%Y%m%d-%H%M")
-#: Имя сессии: `gen-YYYYMMDD-HHMM` + необязательный суффикс коллизии (`-2`, `-3`, …).
-SESSION_RE = re.compile(r"^gen-\d{8}-\d{4}(-\d+)?$")
+#: Имя сессии: `<YYYYMMDDHHMM>-<tag>` + необязательный суффикс коллизии (`-2`, `-3`, …).
+SESSION_RE = re.compile(r"^\d{12}-[a-z0-9._-]+(-\d+)?$")
 
 
 def case_seeds_spec() -> None:
@@ -109,7 +110,7 @@ def case_default_one_seed() -> None:
 
 
 def case_duplicates() -> None:
-    """5. Повторы в `--seeds` убираются: один файл `s{N}.png` на сид, без двойной генерации."""
+    """5. Повторы в `--seeds` убираются: один файл `<seed>-<steps>.png` на сид, без дублей."""
     got = gen_cmd.resolve_seeds("5,5,6,5", None)
     if got != [5, 6]:
         raise AssertionError(f"--seeds '5,5,6,5' -> {got}, ожидалось [5, 6]")
@@ -140,37 +141,36 @@ def case_invalid_spec() -> None:
 
 
 def case_session_name() -> None:
-    """7. Имя сессии `gen-YYYYMMDD-HHMM`, коллизия минуты -> `-2`, `-3`; каталог не создаётся."""
+    """7. Имя сессии `<YYYYMMDDHHMM>-<tag>`, коллизия минуты -> `-2`, `-3`; без каталога."""
     with tempfile.TemporaryDirectory(prefix="qwenstyle-gen-seeds-") as tmp:
-        first = gen_cmd.session_dir("my-scene", out_root=tmp, now=FIXED_NOW)
-        if first.name != "gen-20261115-1940":
-            raise AssertionError(f"имя сессии {first.name!r}, ожидалось 'gen-20261115-1940'")
+        first = project.session_dir(tmp, "qwen", now=FIXED_NOW)
+        if first.name != "202611151940-qwen":
+            raise AssertionError(f"имя сессии {first.name!r}, ожидалось '202611151940-qwen'")
         if not SESSION_RE.match(first.name):
-            raise AssertionError(f"имя сессии не подходит под gen-YYYYMMDD-HHMM: {first.name!r}")
-        if Path(first).parent.name != "my-scene" or Path(first).parent.parent.name != Path(tmp).name:
-            raise AssertionError(f"сессия вне <out>/<имя>/: {first}")
+            raise AssertionError(f"имя сессии не подходит под <YYYYMMDDHHMM>-<tag>: {first.name!r}")
+        if Path(first).parent != Path(tmp):
+            raise AssertionError(f"сессия вне <out>: {first}")
         if first.exists():
             raise AssertionError(f"session_dir создал каталог сам: {first}")
 
         first.mkdir(parents=True)
-        second = gen_cmd.session_dir("my-scene", out_root=tmp, now=FIXED_NOW)
-        if second.name != "gen-20261115-1940-2":
+        second = project.session_dir(tmp, "qwen", now=FIXED_NOW)
+        if second.name != "202611151940-qwen-2":
             raise AssertionError(f"при коллизии минуты ожидалось '-2', дано {second.name!r}")
         second.mkdir(parents=True)
-        third = gen_cmd.session_dir("my-scene", out_root=tmp, now=FIXED_NOW)
-        if third.name != "gen-20261115-1940-3":
+        third = project.session_dir(tmp, "qwen", now=FIXED_NOW)
+        if third.name != "202611151940-qwen-3":
             raise AssertionError(f"третья коллизия: ожидалось '-3', дано {third.name!r}")
 
         # другая минута — независимое имя, суффикса нет
-        other = gen_cmd.session_dir("my-scene", out_root=tmp,
-                                    now=time.strptime("20261115-1941", "%Y%m%d-%H%M"))
-        if other.name != "gen-20261115-1941":
+        other = project.session_dir(tmp, "qwen", now=time.strptime("20261115-1941", "%Y%m%d-%H%M"))
+        if other.name != "202611151941-qwen":
             raise AssertionError(f"новая минута получила {other.name!r}")
-        # другое имя промта — свой каталог, чужие коллизии не влияют
-        other_prompt = gen_cmd.session_dir("another", out_root=tmp, now=FIXED_NOW)
-        if other_prompt.name != "gen-20261115-1940":
-            raise AssertionError(f"имя другого промта: {other_prompt.name!r}")
-    print("  ok: gen-20261115-1940 -> -2 -> -3; каталог создаёт только `run_batch`, не session_dir")
+        # другой промт — другой tag, чужие коллизии не влияют
+        other_prompt = project.session_dir(tmp, "h3", now=FIXED_NOW)
+        if other_prompt.name != "202611151940-h3":
+            raise AssertionError(f"tag другого промта: {other_prompt.name!r}")
+    print("  ok: 202611151940-qwen -> -2 -> -3; каталог создаёт только `run_batch`, не session_dir")
 
 
 CASES = (

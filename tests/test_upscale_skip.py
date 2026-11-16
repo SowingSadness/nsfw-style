@@ -211,8 +211,8 @@ def case_name_without_x1(tmp: Path) -> None:
     name = out_path(reached, factor)
     if "-x1" in name:
         raise AssertionError(f"в имени no-op апскейла появился суффикс: {name!r}")
-    if not name.endswith("-s7.png"):
-        raise AssertionError(f"имя потеряло seed-тег: {name!r}")
+    if not name.endswith("-7-25.png"):
+        raise AssertionError(f"имя потеряло теги seed-шагов: {name!r}")
 
     above = _cfg(target_height=2160)
     big_factor = pipeline.upscale_effective_factor(above, (GEN_W, GEN_H))

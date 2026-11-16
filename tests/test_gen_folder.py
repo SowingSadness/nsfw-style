@@ -1,28 +1,32 @@
-"""Папка промта `prompts/<имя>/` для `gen`: `prompt.txt`, фильтр картинок, порядок, guard.
+"""Проект промта `prompts/<project>/` для `gen`: refs/, `prompt-<model>.txt`, сессия.
 
 Запуск: `PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe tests/test_gen_folder.py`
 Успех: `PASS` по каждому кейсу, `ALL PASS` и exit 0; провал: `FAIL <кейс>: ...` и exit 1.
 
-Зачем: `gen` — главная точка входа пользователя (план публикации, решение 7), и весь её вход
-описывается папкой: `prompt.txt` + `image1.png`…`image10.*`. Ошибка здесь не падает — она молча
-берёт не те файлы, отдаёт модели не тот набор референсов или просит пользователя гадать, почему
-«ничего не происходит». Тест фиксирует пять правил раскладки **без весов и без генерации**
-(только функции `qwenstyle/cmd/gen.py` и `pipeline.input_problem`):
+Зачем: `gen` — главная точка входа пользователя, и весь её вход описывается проектом:
+`refs/` (любые имена, порядок = natural sort) + `prompt-<model>.txt` + опциональный
+`project.yaml`. Ошибка здесь не падает — она молча берёт не те файлы, отдаёт модели не тот
+набор референсов или просит пользователя гадать, почему «ничего не происходит».
 
-1. файл промта — **ровно** `prompt.txt`; нет его — понятная ошибка с путём (exit 2);
-2. референс — только файл с префиксом `image` и расширением `.png/.jpg/.jpeg/.webp`
-   (регистр букв и расширения не важен; `prompt.txt`, заметки и `.gif` игнорируются);
-3. порядок — **естественный**: `image2.png` раньше `image10.png` (`sorted()` дал бы наоборот);
-4. `Capabilities.max_images` соблюдается: из 12 файлов берутся первые 10, в лог — кого отбросили;
-5. папка без картинок при `requires_image=True` — ошибка (а для T2I-модели — законный `noref`).
+Тест фиксирует правила раскладки **без весов и без генерации**:
 
-Пользовательские каталоги не трогаются: корни `prompts/` и `out/` подменяются на временный каталог
-(`gen.PROMPT_ROOT`/`gen.session_dir`), поэтому тест не оставляет следов в репозитории.
+1. `refs/`: только png|jpg|jpeg|webp, natural sort, дубликат стема -> первый + предупреждение;
+2. `--prompt`: `<project>/<stem>`, `<project>/<stem>.txt`, `<project>` при единственном `*.txt`;
+   ошибки с перечнем кандидатов; выход из `prompts/` отбит;
+3. tag сессии: `prompt-qwen` -> `qwen`, `canyon-iren` -> `canyon-iren`;
+4. имена кадров `<seed>-<steps>[-gen].png`, лог/meta рядом с кадром;
+5. `Capabilities.max_images` соблюдается (12 -> 10), `<imageN>` = порядок refs;
+6. нет `refs/` при `requires_image=True` -> exit 2 с текстом про refs; T2I-пресет — законный
+   `noref`;
+7. переименование референсов с сохранением порядка **не меняет ключ кэша** (`io.images_sha`).
+
+Пользовательские каталоги не трогаются: корень `prompts/` подменяется на временный
+(`_project.PROMPT_ROOT`), поэтому тест не оставляет следов в репозитории.
 """
 from __future__ import annotations
 
+import argparse
 import contextlib
-import functools
 import io
 import shutil
 import sys
@@ -35,249 +39,252 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 sys.dont_write_bytecode = True                   # тест не должен оставлять __pycache__ в пакете
 
-import argparse                                   # noqa: E402 — после правки sys.path
-
-from qwenstyle.cmd import gen as gen_cmd          # noqa: E402
-from qwenstyle.config import RunConfig   # noqa: E402
+from qwenstyle import io as qio                  # noqa: E402
+from qwenstyle.cmd import _project as project    # noqa: E402
+from qwenstyle.cmd import gen as gen_cmd         # noqa: E402
+from qwenstyle.config import ConfigError, RunConfig   # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
 #: Готовый FUSAL-промт тестов (лежит в репозитории, а не в `prompts/`).
 TEST_PROMPT = TESTS_DIR / "texts" / "exp1.txt"
-#: Пресеты с разными требованиями к входу: `VRAM12-release` требует референс, `h3-image` — нет.
-PRESET_NEEDS_IMAGE = "VRAM12-release"
-PRESET_T2I = "h3-image"
-#: Модель qwen_image21 принимает 10 референсов (`Capabilities.max_images`).
-MAX_IMAGES = 10
 
 
 # --------------------------------------------------------------------------- #
-# Временные корни пользовательских каталогов
+# Временный корень projects
 # --------------------------------------------------------------------------- #
+
 @contextlib.contextmanager
-def temp_roots():
-    """`prompts/` и `out/` во временном каталоге: `gen` не пишет в репозиторий.
-
-    Подменяются только корни (`gen.PROMPT_ROOT` и `out_root` у `gen.session_dir`); сама логика
-    поиска/сортировки/guard'а остаётся пользовательской. `cwd` не меняется: относительные пути
-    кешей (`cache/models/…`) должны остаться репозиторными.
-    """
+def temp_root():
+    """`prompts/` во временном каталоге: `gen` не пишет в репозиторий."""
     with tempfile.TemporaryDirectory(prefix="qwenstyle-gen-folder-") as tmp:
-        root = Path(tmp)
-        prompt_root = root / "prompts"
-        prompt_root.mkdir()
-        original_root = gen_cmd.PROMPT_ROOT
-        original_session_dir = gen_cmd.session_dir
-        gen_cmd.PROMPT_ROOT = str(prompt_root)
-        gen_cmd.session_dir = functools.partial(original_session_dir, out_root=str(root / "out"))
+        root = Path(tmp) / "prompts"
+        root.mkdir()
+        original = project.PROMPT_ROOT
+        project.PROMPT_ROOT = root.as_posix()
         try:
-            yield prompt_root
+            yield root
         finally:
-            gen_cmd.PROMPT_ROOT = original_root
-            gen_cmd.session_dir = original_session_dir
+            project.PROMPT_ROOT = original
 
 
 def png_bytes(width: int = 64, height: int = 32) -> bytes:
     """Минимальный настоящий PNG (PIL открывает файл по содержимому, а не по расширению)."""
-    from PIL import Image
+    import zlib
 
-    image = Image.new("RGB", (width, height), (32, 64, 128))
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    return buffer.getvalue()
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return (len(data).to_bytes(4, "big") + body
+                + zlib.crc32(body).to_bytes(4, "big"))
+
+    raw = b"".join(b"\x00" + bytes([40, 80, 120]) * width for _ in range(height))
+    header = (b"\x89PNG\r\n\x1a\n"
+              + chunk(b"IHDR", width.to_bytes(4, "big") + height.to_bytes(4, "big")
+                      + b"\x08\x02\x00\x00\x00"))
+    return header + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
 
 
-def make_case(root: Path, name: str, files: "list[str] | dict[str, bytes]",
-              *, prompt: bool = True) -> Path:
-    """Создать папку промта `root/<name>/`: `prompt.txt` (копия теста) + перечисленные файлы."""
+def make_project(root: Path, name: str, refs: list[str] | None = None,
+                 prompts: tuple[str, ...] = ("prompt-qwen.txt",),
+                 refs_dir: str = "refs") -> Path:
+    """Проект с `refs/` и промт-файлами (текст — готовый FUSAL-промт тестов)."""
     folder = root / name
     folder.mkdir(parents=True)
-    if prompt:
-        shutil.copyfile(TEST_PROMPT, folder / gen_cmd.PROMPT_FILE)
-    payload = png_bytes() if files else b""
-    if isinstance(files, dict):
-        for file_name, data in files.items():
-            (folder / file_name).write_bytes(data)
-    else:
-        for file_name in files:
-            (folder / file_name).write_bytes(payload)
+    if refs:
+        (folder / refs_dir).mkdir()
+        for index, filename in enumerate(refs, start=1):
+            (folder / refs_dir / filename).write_bytes(png_bytes(width=32 + index))
+    for filename in prompts:
+        shutil.copyfile(TEST_PROMPT, folder / filename)
     return folder
 
 
-def run_gen(prompt: str, *extra: str, preset: str = PRESET_NEEDS_IMAGE,
-            **kwargs: object) -> "tuple[int, str]":
-    """`gen.run()` в процессе (без подпроцесса): вернуть (код, stdout+stderr)."""
-    namespace = dict(preset=preset, prompt=prompt, aspect=None, sets=["cache_supersede=none"],
-                     seeds="1", count=None, dry_run=True, no_logs=True)
-    namespace.update(kwargs)
-    args = argparse.Namespace(**namespace)
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+def gen_args(**overrides) -> argparse.Namespace:
+    """Namespace со всеми полями `gen` (значения по умолчанию — как у CLI)."""
+    values = dict(preset=None, prompt=None, project=None, out=None, aspect=None, sets=[],
+                  upscale=None, seeds="1", count=None, dry_run=True, no_logs=False)
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def call_gen(args: argparse.Namespace) -> tuple[int, str, str]:
+    """`gen.run` с перехватом stdout/stderr (без весов: `--dry-run`)."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         code = gen_cmd.run(args)
-    return code, buffer.getvalue()
+    return code, out.getvalue(), err.getvalue()
 
 
 # --------------------------------------------------------------------------- #
 # Кейсы
 # --------------------------------------------------------------------------- #
 
-def case_prompt_file() -> None:
-    """1. Файл промта — ровно `prompt.txt`; его отсутствие даёт понятную ошибку (exit 2)."""
-    if gen_cmd.PROMPT_FILE != "prompt.txt":
-        raise AssertionError(f"gen.PROMPT_FILE={gen_cmd.PROMPT_FILE!r}, ожидалось 'prompt.txt'")
-    with temp_roots() as root:
-        # правильное имя файла — план строится (dry-run: ни весов, ни кадров)
-        make_case(root, "ok", ["image1.png"])
-        code, out = run_gen("ok")
-        if code != 0:
-            raise AssertionError(f"папка с prompt.txt не принята (код {code}): {out[-600:]}")
-        # «похожие» имена не считаются файлом промта (`PROMPT.TXT` не проверяем: файловая
-        # система Windows регистронезависима, и это фактически то же имя)
-        make_case(root, "wrong", ["image1.png"], prompt=False)
-        for file_name in ("prompt.md", "prompt.txt.bak", "prompt", "prompt-en.txt"):
-            (root / "wrong" / file_name).write_text("fusal style.", encoding="utf-8")
-        code, out = run_gen("wrong")
-        if code != 2:
-            raise AssertionError(f"без prompt.txt ожидался код 2, получено {code}: {out[-400:]}")
-        if "prompt.txt" not in out:
-            raise AssertionError(f"в ошибке нет имени нужного файла: {out[-400:]}")
-        # несуществующая папка — та же ошибка, путь назван
-        code, out = run_gen("nope")
-        if code != 2 or "nope" not in out:
-            raise AssertionError(f"нет папки промта: код {code}, вывод {out[-400:]}")
-    print("  ok: только prompt.txt; иначе exit 2 с путём к отсутствующему файлу")
+def case_refs_discovery() -> None:
+    """1. `refs/`: фильтр расширений, natural sort, дубликат стема -> первый."""
+    with temp_root() as root:
+        names = ["10-c.webp", "2-b.JPG", "01-a.png", "notes.md", "anim.gif", "dup.jpg", "dup.png"]
+        folder = make_project(root, "p", names)
+        got = [path.name for path in project.discover_refs(folder / "refs")]
+        want = ["01-a.png", "2-b.JPG", "10-c.webp", "dup.jpg"]
+        if got != want:
+            raise AssertionError(f"discover_refs -> {got}, ожидалось {want}")
+        if project.discover_refs(folder / "none") != []:
+            raise AssertionError("discover_refs непустого несуществующего каталога")
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            project.discover_refs(folder / "refs")
+        if "дубликат dup.png" not in captured.getvalue():
+            raise AssertionError(f"нет предупреждения о дубликате: {captured.getvalue()!r}")
+        print("  ok: natural sort (01, 2, 10), фильтр расширений, дубликат -> первый + warning")
 
 
-def case_extension_filter() -> None:
-    """2. Референс = `image*` + png/jpg/jpeg/webp; регистр не важен, прочее игнорируется."""
-    with temp_roots() as root:
-        folder = make_case(root, "mixed", [
-            "image1.png", "image2.JPG", "image3.jpeg", "IMAGE4.WebP",
-            "prompt.txt", "notes.md", "image5.gif", "photo.png", "image", "image6.tiff",
-            ".gitkeep",
-        ])
-        found = [path.name for path in gen_cmd.discover_images(folder)]
-        want = ["image1.png", "image2.JPG", "image3.jpeg", "IMAGE4.WebP"]
-        if found != want:
-            raise AssertionError(f"фильтр расширений/префикса: {found}, ожидалось {want}")
-        if gen_cmd.discover_images(folder / "нет-такой-папки"):
-            raise AssertionError("discover_images несуществующей папки должен вернуть пустой список")
-    print(f"  ok: из {len(found)} найденных — только image* с png/jpg/jpeg/webp (регистр не важен)")
+def case_resolve_prompt_forms() -> None:
+    """2. `--prompt`: стем, `.txt`, каталог с единственным `.txt`; ошибки с перечнем."""
+    with temp_root() as root:
+        make_project(root, "one", ["01.png"])
+        make_project(root, "two", ["01.png"], prompts=("prompt-qwen.txt", "prompt-h3.txt"))
+        for raw in ("one/prompt-qwen", "one/prompt-qwen.txt"):
+            prompt = project.resolve_prompt(raw)
+            if prompt.prompt_file.name != "prompt-qwen.txt" or prompt.tag != "qwen":
+                raise AssertionError(f"{raw} -> {prompt}")
+            if prompt.project_dir.name != "one":
+                raise AssertionError(f"{raw}: проект {prompt.project_dir}")
+        single = project.resolve_prompt("one")
+        if single.prompt_file.name != "prompt-qwen.txt":
+            raise AssertionError(f"каталог с одним .txt -> {single.prompt_file}")
+        for raw, token in (("one/nope", "prompt-qwen.txt"), ("two", "prompt-h3.txt")):
+            try:
+                project.resolve_prompt(raw)
+            except ConfigError as exc:
+                if token not in str(exc):
+                    raise AssertionError(f"в ошибке {raw!r} нет {token!r}: {exc}") from None
+            else:
+                raise AssertionError(f"{raw!r} не отбит")
+        for raw in ("../outside", "one/../../x", "D:/absolute/prompt-qwen"):
+            try:
+                project.resolve_prompt(raw)
+            except ConfigError:
+                continue
+            raise AssertionError(f"выход из prompts/ не отбит: {raw!r}")
+        print("  ok: стем/.txt/каталог; несколько .txt и выход из prompts/ -> ConfigError")
 
 
-def case_natural_sort() -> None:
-    """3. Естественная сортировка: `image2` раньше `image10` (а не как у `sorted()`)."""
-    names = ["image10.png", "image2.png", "image1.png"]
-    plain = sorted(names)
-    if plain == ["image1.png", "image2.png", "image10.png"]:
-        raise AssertionError("sorted() уже даёт естественный порядок — тест ничего не проверяет")
-    with temp_roots() as root:
-        folder = make_case(root, "order", names + ["image3.png"])
-        found = [path.name for path in gen_cmd.discover_images(folder)]
-        want = ["image1.png", "image2.png", "image3.png", "image10.png"]
-        if found != want:
-            raise AssertionError(f"порядок картинок {found}, ожидался естественный {want}")
-    print(f"  ok: {names} -> image1 < image2 < image10 (sorted() дал бы {plain})")
+def case_tags() -> None:
+    """3. Tag сессии: `prompt-qwen` -> `qwen`, прочее — как есть, мусор — в `-`."""
+    cases = {
+        "prompt-qwen": "qwen",
+        "prompt-H3": "h3",
+        "canyon-iren": "canyon-iren",
+        "My Scene!": "my-scene",
+    }
+    for stem, want in cases.items():
+        got = project.tag_for(stem, Path("prompts/fallback"))
+        if got != want:
+            raise AssertionError(f"tag_for({stem!r}) -> {got!r}, ожидалось {want!r}")
+    if project.tag_for("prompt", Path("prompts/camp")) != "camp":
+        raise AssertionError("tag_for('prompt') должен брать имя проекта")
+    print("  ok: prompt-qwen->qwen, prompt-H3->h3, мусор -> безопасный tag")
 
 
-def case_max_images_guard() -> None:
-    """4. Guard `Capabilities.max_images`: из 12 картинок берутся первые 10, отброшенные — в лог."""
-    cfg = RunConfig.from_profile(PRESET_NEEDS_IMAGE)
-    caps = gen_cmd.backend_caps(cfg)
-    limit = getattr(caps, "max_images", None)
-    if limit != MAX_IMAGES:
-        raise AssertionError(f"caps.max_images={limit!r}, ожидалось {MAX_IMAGES} у {caps}")
-    with temp_roots() as root:
-        names = [f"image{index}.png" for index in range(1, 13)]
-        folder = make_case(root, "many", names)
-        images = gen_cmd.discover_images(folder)
-        if len(images) != 12:
-            raise AssertionError(f"discover_images вернул {len(images)} из 12")
-        buffer = io.StringIO()
-        with contextlib.redirect_stdout(buffer):
-            limited_cfg, kept = gen_cmd.apply_image_limit(cfg, images, PRESET_NEEDS_IMAGE, caps)
-        out = buffer.getvalue()
-        if [path.name for path in kept] != names[:MAX_IMAGES]:
-            raise AssertionError(f"оставлены {[p.name for p in kept]}, ожидались "
-                                 f"{names[:MAX_IMAGES]}")
-        for token in ("12", str(MAX_IMAGES), "image11", "image12"):
-            if token not in out:
-                raise AssertionError(f"в сообщении guard'а нет {token!r}: {out.strip()!r}")
-        if len(limited_cfg.inputs) != MAX_IMAGES:
-            raise AssertionError(f"в конфиг ушло {len(limited_cfg.inputs)} референсов, "
-                                 f"ожидалось {MAX_IMAGES}")
-        # ровно 10 и меньше — ничего не отбрасывается и не печатается
-        buffer = io.StringIO()
-        with contextlib.redirect_stdout(buffer):
-            _, kept_ten = gen_cmd.apply_image_limit(cfg, images[:MAX_IMAGES],
-                                                    PRESET_NEEDS_IMAGE, caps)
-        if len(kept_ten) != MAX_IMAGES or buffer.getvalue().strip():
-            raise AssertionError(f"на 10 картинках guard молчит и ничего не режет: "
-                                 f"{buffer.getvalue()!r}")
-    print(f"  ok: 12 картинок -> взяты image1..image{MAX_IMAGES}, image11..image12 отброшены с логом")
+def case_frame_names() -> None:
+    """4. Имена: `<seed>-<steps>[-gen].png`; лог/meta — рядом с кадром."""
+    gen_path, up_path = qio.batch_paths("d", 84, 25)
+    if (gen_path, up_path) != ("d/84-25-gen.png", "d/84-25.png"):
+        raise AssertionError(f"batch_paths -> {(gen_path, up_path)}")
+    cfg = RunConfig.from_mapping({"preset": "base", "seed": 84, "out": "out/x.png"})
+    for factor, want in ((0.0, "out/x-84-25.png"), (2.0, "out/x-84-25-x2.png")):
+        got = qio.out_path(cfg, factor)
+        if got != want:
+            raise AssertionError(f"out_path(factor={factor}) -> {got}, ожидалось {want}")
+        if qio.out_path(cfg.merged(out=got), factor) != got:
+            raise AssertionError(f"out_path не идемпотентен для {got}")
+    from qwenstyle.runlog import log_path, meta_path
+    if log_path("d/84-25.png").name != "84-25.log":
+        raise AssertionError(f"log_path -> {log_path('d/84-25.png')}")
+    if meta_path("d/84-25.png").name != "84-25-meta.json":
+        raise AssertionError(f"meta_path -> {meta_path('d/84-25.png')}")
+    print("  ok: 84-25[.log|-meta.json|-gen.png]; out_path идемпотентен")
 
 
-def case_no_images() -> None:
-    """5. Папка без картинок: Qwen-Image-2.1 и H3 строят T2I-план (`noref`).
+def case_placeholders_and_limit() -> None:
+    """5. `<imageN>` = порядок refs; `max_images` отбрасывает хвост с явной строкой."""
+    with temp_root() as root:
+        folder = make_project(root, "p", ["01.png", "02.png", "03.png"])
+        refs = project.discover_refs(folder / "refs")
+        mapping = project.placeholder_map(refs)
+        if [index for _, index in mapping] != [1, 2, 3]:
+            raise AssertionError(f"placeholder_map -> {mapping}")
+        cfg = RunConfig.from_mapping({"preset": "base"})
 
-    Проверка «референс обязателен» живёт в `Capabilities.requires_image` и срабатывает только
-    у бекенда, который её объявляет: у `qwen_image21` и `minimax_h3_image` это `False` (T2I —
-    штатный режим), поэтому ветка проверяется заглушкой caps, как в `tests/test_t2i_preflight.py`.
-    """
-    from types import SimpleNamespace
+        class Caps:
+            max_images = 2
 
-    from qwenstyle import pipeline
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            limited, kept = gen_cmd.apply_image_limit(cfg, refs, "base", Caps())
+        if len(kept) != 2 or len(limited.inputs) != 2:
+            raise AssertionError(f"limit не сработал: kept={kept}, inputs={limited.inputs}")
+        if "01.png..02.png" not in captured.getvalue():
+            raise AssertionError(f"нет строки об отброшенных: {captured.getvalue()!r}")
+        print("  ok: <image1..3> по natural sort; max_images=2 -> взяты 01, 02")
 
-    with temp_roots() as root:
-        make_case(root, "empty", [])
-        for preset in (PRESET_NEEDS_IMAGE, PRESET_T2I):
-            code, out = run_gen("empty", preset=preset, aspect="16:9")
-            if code != 0:
-                raise AssertionError(f"T2I без картинок ({preset}) ожидал код 0, "
-                                     f"получено {code}: {out[-600:]}")
-            if "T2I" not in out:
-                raise AssertionError(f"в выводе {preset} нет пометки T2I: {out[-400:]}")
 
-    # Бекенд, объявивший requires_image=True, обязан упасть до загрузки весов.
-    cfg = RunConfig.from_profile(PRESET_NEEDS_IMAGE, aspect="16:9")
-    problem = pipeline.input_problem(cfg, SimpleNamespace(requires_image=True))
+def case_requires_image() -> None:
+    """6. Без refs: бекенд, требующий референс, отбивается; T2I — законный `noref`."""
+    from qwenstyle.pipeline import input_problem
+
+    cfg = RunConfig.from_mapping({"preset": "VRAM12-preview"})
+
+    class NeedsImage:
+        requires_image = True
+        max_images = 10
+
+    problem = input_problem(cfg, NeedsImage())
     if not problem or "требует референс" not in problem:
-        raise AssertionError(f"requires_image=True не даёт ошибку про --input: {problem!r}")
-    # И обратное: без --aspect T2I не знает пропорцию кадра.
-    problem = pipeline.input_problem(RunConfig.from_profile(PRESET_NEEDS_IMAGE),
-                                     SimpleNamespace(requires_image=False))
-    if not problem or "--aspect" not in problem:
-        raise AssertionError(f"T2I без --aspect не просит пропорцию: {problem!r}")
-    print(f"  ok: пустая папка -> T2I (noref) для {PRESET_NEEDS_IMAGE} и {PRESET_T2I}; "
-          f"requires_image=True и «нет --aspect» ловятся")
-
-
-def case_prompt_dir() -> None:
-    """6. `prompt_dir(name)` = `<PROMPT_ROOT>/<имя>` (никаких вложенных путей и `..`)."""
-    with temp_roots() as root:
-        path = gen_cmd.prompt_dir("my-scene")
-        if Path(path).name != "my-scene" or Path(path).parent.name != root.name:
-            raise AssertionError(f"prompt_dir вернул {path!r} при корне {root}")
-        make_case(root, "case-name", ["image1.png"])
-        code, out = run_gen("case-name")
+        raise AssertionError(f"input_problem(requires_image=True) -> {problem!r}")
+    with temp_root() as root:
+        make_project(root, "noref", refs=None)
+        # у Qwen T2I разрешён, но без --aspect пропорцию взять неоткуда
+        code, _, err = call_gen(gen_args(preset="VRAM12-preview", prompt="noref/prompt-qwen"))
+        if code != 2 or "--aspect" not in err:
+            raise AssertionError(f"T2I без --aspect: code={code}, stderr={err!r}")
+        code, out, err = call_gen(gen_args(preset="VRAM12-preview", prompt="noref/prompt-qwen",
+                                           aspect="1:1"))
         if code != 0:
-            raise AssertionError(f"папка с дефисом в имени не принята: {out[-400:]}")
-    print("  ok: prompt_dir -> prompts/<имя>, дефисы и подчёркивания в имени работают")
+            raise AssertionError(f"T2I с --aspect: code={code}, out={out[-300:]}, err={err[-300:]}")
+        if "T2I (noref)" not in out:
+            raise AssertionError(f"шапка не сказала про noref: {out[:300]!r}")
+        print("  ok: requires_image -> 'требует референс'; без refs+aspect -> exit 2; с aspect -> noref")
+
+
+def case_cache_key_stable() -> None:
+    """7. Переименование refs с сохранением порядка не меняет ключ кэша."""
+    with temp_root() as root:
+        folder = make_project(root, "p", ["01-a.png", "02-b.png"])
+        before = [folder / "refs" / "01-a.png", folder / "refs" / "02-b.png"]
+        old = qio.images_sha(before)
+        for source, target in (("01-a.png", "a.png"), ("02-b.png", "b.png")):
+            (folder / "refs" / source).rename(folder / "refs" / target)
+        after = [folder / "refs" / "a.png", folder / "refs" / "b.png"]
+        new = qio.images_sha(after)
+        if old != new:
+            raise AssertionError(f"ключ кэша изменился: {old} -> {new}")
+        if qio.images_sha(list(reversed(after))) == new:
+            raise AssertionError("порядок референсов перестал влиять на ключ")
+        print(f"  ok: {old} == после переименования; обратный порядок даёт другой ключ")
 
 
 CASES = (
-    ("1. файл промта — ровно prompt.txt", case_prompt_file),
-    ("2. фильтр расширений и префикса", case_extension_filter),
-    ("3. естественная сортировка image2 < image10", case_natural_sort),
-    ("4. guard max_images", case_max_images_guard),
-    ("5. папка без картинок", case_no_images),
-    ("6. prompt_dir", case_prompt_dir),
+    ("1. refs/: имена, порядок, дубликаты", case_refs_discovery),
+    ("2. --prompt: формы и ошибки", case_resolve_prompt_forms),
+    ("3. tag сессии", case_tags),
+    ("4. имена кадров/лога/meta", case_frame_names),
+    ("5. <imageN> и max_images", case_placeholders_and_limit),
+    ("6. нет refs/ -> ошибка, T2I -> noref", case_requires_image),
+    ("7. ключ кэша от имён не зависит", case_cache_key_stable),
 )
 
 
 def main() -> int:
-    if not TEST_PROMPT.is_file():
-        print(f"FAIL: нет промта тестов {TEST_PROMPT}")
-        return 1
     failed = 0
     for label, case in CASES:
         try:
