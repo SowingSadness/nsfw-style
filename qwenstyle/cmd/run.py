@@ -118,7 +118,11 @@ def parse_size(spec: str) -> int:
 
 
 def pick_preset(args: argparse.Namespace) -> str:
-    """`--config` и `--model` — один и тот же выбор пресета; `--preview` без них = preview."""
+    """`--config` и `--model` — один и тот же выбор пресета; без них — `DEFAULT_CONFIG`.
+
+    `--preview` больше не выбирает отдельный пресет: это режим черновика внутри того же
+    конфига (`preview: true` -> 480p и 8 шагов), поэтому флаг работает с любым пресетом.
+    """
     config = getattr(args, "config", None)
     model = getattr(args, "model", None)
     if config and model and config != model:
@@ -128,7 +132,7 @@ def pick_preset(args: argparse.Namespace) -> str:
         )
     if model or config:
         return str(model or config)
-    return "preview" if getattr(args, "preview", False) else DEFAULT_CONFIG
+    return DEFAULT_CONFIG
 
 
 def model_label(cfg: RunConfig) -> str:
@@ -136,12 +140,12 @@ def model_label(cfg: RunConfig) -> str:
 
     Возвращает `base`, если прогон идёт на **той же** модели, что и профиль по умолчанию
     (Qwen-Image-2.1 + FUSAL R80): другой размер/шаги/апскейл — это всё ещё `base`, поэтому
-    `preview-qwen`, `full-qwen`, `qwen`, `anime` печатаются как `base`.
-    Всё остальное возвращается именем пресета: `turbo` (другой трансформер), а также FLUX.2-профили.
+    `strong-release`, `flagship-4k-fast`, `flagship-r3-169` печатаются как `base`.
+    Всё остальное возвращается именем пресета: `turbo` (другой трансформер), а также не-qwen бекенды.
 
     Решается по конфигу, а не списком имён: новый пресет на базовой модели получает `base`
-    автоматически, и его не надо регистрировать здесь (так был допущен баг: `preview` остался
-    в старом списке `BASE_PRESETS` после того, как стал FLUX.2, и печатался неверно).
+    автоматически, и его не надо регистрировать здесь (так был допущен баг: пресет ушёл на FLUX.2,
+    остался в старом списке `BASE_PRESETS` и печатался неверно).
     """
     preset = str(cfg.preset or DEFAULT_CONFIG)
     gen = cfg.generation
@@ -395,7 +399,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                         help="взять промт из файла (prompts/*.txt) вместо встроенного в конфиг")
     source.add_argument("--config", default=None, metavar="PRESET",
                         help=f"пресет ({', '.join(available_presets())}) или путь к YAML; "
-                             f"по умолчанию {DEFAULT_CONFIG} (с --preview — preview)")
+                             f"по умолчанию {DEFAULT_CONFIG}")
     source.add_argument("--model", default=None, choices=("base", "turbo"), metavar="PROFILE",
                         help="профиль генерации: base (по умолчанию) = R80/25 шагов; turbo = "
                              "Turbo-трансформер (8 шагов, тот же text-encoder и VAE) — только явно")

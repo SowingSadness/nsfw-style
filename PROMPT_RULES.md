@@ -186,9 +186,9 @@ fusal style.
 - `negative_prompt` в CLI — молча игнорируется.
 - Промт длиннее ~2.5k символов из противоречащих друг другу деталей.
 - Смена текста промта в цикле на 1024 — каждый прогон = новый энкод (6–35 с на GPU, до 255 с
-  на CPU). Итерации по промту — только на `--config preview-qwen` (480p/8 шагов, ~11–20 с при
-  прогретом кэше; именно `--config preview-qwen`, а не `--preview` — см. §9.1),
-  финал — один прогон на `768p`/25 шагов.
+  на CPU). Итерации по промту — только в черновике `--preview` (480p/8 шагов, ~11–20 с при
+  прогретом кэше); FUSAL в базовом пресете выключена, поэтому для стиля добавь
+  `--lora-scale 0.7` (см. §9.1), финал — один прогон на `768p`/25 шагов.
 - Крутить seed, когда «нет стиля»: сначала проверить, что адаптер применился
   (в логе `LoRA-тензоров переведено в bf16: 448`) и что первая строка — `fusal style.`
 - Запреты снаружи промта: их не существует — только скобки внутри блока.
@@ -216,7 +216,7 @@ fusal style.
 
 ```bash
 # черновик: 480p/640p, 8 шагов — ~11–20 с после прогрева кэшей (embeds + fp8-трансформер)
-PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --config preview-qwen \
+PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --preview --lora-scale 0.7 \
     --input <png> --prompt-file prompts/exp3.txt --out out/preview.png --seed 1
 
 # финал: 768p, 25 шагов — ~45 с при готовом кэше эмбеддингов
@@ -225,41 +225,27 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --size 768p --s
 
 # план без загрузки весов: сетка crop, ключ кэша, нужен ли энкод
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m qwenstyle run --dry-run \
-    --config preview-qwen --input <png> --prompt-file prompts/exp3.txt --out out/plan.png
+    --preview --input <png> --prompt-file prompts/exp3.txt --out out/plan.png
 ```
 
-### 9.1 Ловушка: `--preview` ≠ «черновик Qwen»
+### 9.1 `--preview` — это режим, а не пресет
 
-Проверено `--dry-run`: флаг `--preview` подбирает **пресет `preview`, а это FLUX.2**, не Qwen
-(`qwenstyle/cmd/run.py::pick_preset`: `return "preview" if args.preview else DEFAULT_CONFIG`):
+`--preview` не подменяет пресет: он включает черновой режим внутри выбранного (`preview: true` ->
+480p и 8 шагов, `RunConfig.is_preview`). Отдельного пресета `preview` (FLUX.2) в наборе больше нет,
+и флаг его не подразумевает — проверено `--dry-run`:
 
 ```text
 $ python -m qwenstyle run --dry-run --preview ... --prompt-file prompts/exp3.txt
-[plan] backend=flux2 preset=preview ... guidance=4.0 lora=—        <-- FLUX.2, FUSAL-промт ему чужой
-$ python -m qwenstyle run --dry-run --config preview-qwen ...
-[plan] backend=qwen_image21 preset=preview-qwen ... lora=0.7       <-- то, что нужно
+[plan] backend=qwen_image21 preset=base size_px=- resolution=640 ... steps=8 lora=0
 ```
 
 Следствия:
 
-- для быстрых итераций по FUSAL-промту — **`--config preview-qwen`** (480p, 8 шагов), а не `--preview`;
-- `--preview` вдобавок **ломает `--lora-scale`**: в flux2-пресете `generation.lora = None`, и override
-  `generation.lora.scale` создаёт полупустой `LoraConfig` → `config.generation.lora: LoraConfig.__init__()
-  missing 2 required positional arguments: 'repo' and 'filename'`. Ошибка непонятная, причина — не тот пресет;
-- поэтому в примерах этого документа не используется `--preview`. Старые примеры с ним
-  (`AGENTS.md` §5.6, `.pi/skills/fusal-prompt/SKILL.md` §3) нужно читать как `--config preview-qwen`.
-
-Ключ кэша эмбеддингов = `md5(промт)[:12] + sha256(входного файла)[:12] + WxH` (+ тег энкодера,
-+ `-dev-cuda` на GPU-пути). Следствия для работы с промтом:
-
-- **Бесплатно** (только GPU-шаги): `--seed`, `--steps`, `--lora-scale`, повторный прогон с тем же
-  промтом/картинкой/резолюцией.
-- **Дорого** (новый энкод): любая правка **текста промта**, другой **входной файл**, другая
-  **резолюция** или **аспект**. 6–35 с на GPU (умолчание), 55–255 с при `--set encoder.device=cpu`.
-- Поэтому порядок итераций: зафиксировать картинку и промт → перебрать seed / lora-scale / steps
-  на 480–640p → финал на 768p **один раз**. Подробнее — `AGENTS.md` §6.
-- Вытеснение старых записей идёт отложенной задачей `cache_supersede` в конце прогона
-  (политика `pair` по умолчанию) — во время энкода ничего не удаляется.
+- для быстрых итераций — `--preview` (480p, 8 шагов) поверх любого пресета;
+- LoRA в `base` по умолчанию выключена (`lora.scale: 0`), поэтому для FUSAL-промта добавь
+  `--lora-scale 0.7`: это бесплатная ось, кэш эмбеддингов не инвалидируется (`AGENTS.md` §5.6);
+- если флаги не нужны, есть готовые стилевые черновики `strong-preview-anime` /
+  `flagship-preview-anime` (768p, 8 шагов, `lora 0.7`).
 
 ---
 
@@ -298,16 +284,16 @@ Qwen-Image 2.1 со своей манерой письма. Если гоняе�
 - проверяется на 0: композиция/анатомия «из коробки» (если баг есть и на 0 — дело в базе или
   в формулировке, LoRA не виновата);
 - время и VRAM идентичны прогону с LoRA, энкод не платится: свип `0 / 0.5 / 0.7 / 1.0` стоит только
-  GPU-шаги (~11–20 с на `--config preview-qwen`).
+  GPU-шаги (~11–20 с на `--preview`).
 
 Заготовка свободного промта под базу лежит в `prompts/base-exp3.txt` (тот же сюжет, что `exp3`,
 но без триггера и блоков):
 
 ```bash
-# A/B на одном входе и seed: --config preview-qwen (НЕ --preview, см. §9.1)
---config preview-qwen --lora-scale 1.0 --prompt-file prompts/exp3.txt      --out out/tests/ab-lora.png
---config preview-qwen --lora-scale 0   --prompt-file prompts/exp3.txt      --out out/tests/ab-lora0.png
---config preview-qwen --lora-scale 0   --prompt-file prompts/base-exp3.txt --out out/tests/ab-base0.png
+# A/B на одном входе и seed: черновик --preview, LoRA — бесплатная ось (см. §9.1)
+--preview --lora-scale 1.0 --prompt-file prompts/exp3.txt      --out out/tests/ab-lora.png
+--preview --lora-scale 0   --prompt-file prompts/exp3.txt      --out out/tests/ab-lora0.png
+--preview --lora-scale 0   --prompt-file prompts/base-exp3.txt --out out/tests/ab-base0.png
 ```
 
 ### Что показал замер (`out/tests/lora0-ab/`, 864×480, 8 шагов, seed 20261113,

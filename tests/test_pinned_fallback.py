@@ -206,7 +206,7 @@ def case_pin_policy() -> None:
     print("  ok: выключает только явный encoder.pin_memory=0")
 
     # Правило не следует за offload: включение группы у не-group пресета pin не трогает.
-    for name in ("strong-preview", "preview-qwen"):
+    for name in ("strong-preview", "flagship-preview"):
         grp = RunConfig.from_profile(name).merged(**{"generation.offload": "group"})
         if grp.generation.offload != "group" or grp.encoder_pin_memory is not True:
             raise AssertionError(f"{name}: pin не должен зависеть от generation.offload")

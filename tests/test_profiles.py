@@ -59,20 +59,13 @@ PROFILE_TARGET_HEIGHT = {"weak": 1080, "strong": 1440, "flagship": 2160}
 #: Жёстко зафиксированные ожидания метки там, где ошибка уже случалась.
 EXPECTED_LABELS = {
     "base": "base",
-    "qwen": "base",
-    "preview-qwen": "base",
-    "full-qwen": "base",
     "turbo": "turbo",
-    "flux2": "flux2",
-    "preview": "preview",
-    "demo": "demo",
-    "full-flux2": "full-flux2",
     "h3-image": "h3-image",
 }
 
 #: Dev-пресеты, на которые опираются эксперименты/README разработчика (публичными не являются).
-DEV_PRESETS = ("base", "anime", "turbo", "flux2", "preview", "demo", "full-flux2", "full-qwen",
-               "qwen-2k", "preview-qwen", "h3-image")
+#: FLUX.2-пресеты удалены вместе с остальными dev-надстройками; бекенд `flux2` остался в коде.
+DEV_PRESETS = ("base", "turbo", "h3-image", "flagship-r3-169", "flagship-r3-43")
 
 #: Dev-опции, которых в публичных пресетах быть не должно (план публикации, решения 4 и 12).
 DEV_ONLY_BACKENDS = ("seedvr2", "flux2")
@@ -212,17 +205,12 @@ def case_labels() -> None:
     print(f"  ok: {len(available_presets())} пресетов -> base у {len(base_labels)} "
           f"({', '.join(base_labels)})")
 
-    # Явная защита от старого бага: `preview` — FLUX.2, а не черновик base.
-    preview = RunConfig.from_profile("preview")
-    if preview.generation.backend != "flux2":
-        raise AssertionError(f"preview больше не flux2: backend={preview.generation.backend!r}")
-    if model_label(preview) == "base":
-        raise AssertionError("preview снова считается base (это FLUX.2-пресет)")
-    if model_label(RunConfig.from_profile("preview-qwen")) != "base":
-        raise AssertionError("preview-qwen (Qwen + FUSAL R80) обязан остаться base")
+    # Метка не зависит от размера/шагов/апскейла: публичный флагманский пресет — всё ещё `base`.
+    if model_label(RunConfig.from_profile("flagship-4k-fast")) != "base":
+        raise AssertionError("flagship-4k-fast (Qwen + FUSAL R80) обязан остаться base")
     if model_label(RunConfig.from_profile("weak-preview")) == "base":
         raise AssertionError("weak-preview идёт на Turbo-трансформере и не может быть base")
-    print("  ok: preview = FLUX.2 (не base), preview-qwen = base, weak-preview = свой профиль")
+    print("  ok: flagship-4k-fast = base, weak-preview = свой профиль")
 
 
 def case_dev_presets() -> None:

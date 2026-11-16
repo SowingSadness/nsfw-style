@@ -3,7 +3,7 @@
 Запуск: `PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe tests/test_upscale_skip.py`
 Успех: `PASS` по каждому кейсу, `ALL PASS` и exit 0; провал: `FAIL <кейс>: ...` и exit 1.
 
-Зачем (план `qwen1440p-perf`, шаг 3): пресет `full-qwen` держит `upscale.target_height: 1440`,
+Зачем (план `qwen1440p-perf`, шаг 3): пресет с `upscale.target_height: 1440` (ныне — `strong-release`),
 а `--size 1440p` уже даёт кадр 1920x1440 — код всё равно поднимал Real-ESRGAN и тратил 9.6 s
 на no-op (`[post] esrgan x1: 1920x1440 -> 1920x1440 (9.6s)`), плюс дописывал `-x1` в имя файла.
 Тест фиксирует матрицу «целевая высота / фактор -> бекенд вызван или нет» без GPU и без весов:

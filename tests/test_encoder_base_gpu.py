@@ -139,7 +139,7 @@ def case_auto_device(tmp: Path) -> None:
     probe = (
         "import sys\n"
         "from qwenstyle.config import RunConfig\n"
-        "cfg = RunConfig.from_profile('full-qwen')\n"
+        "cfg = RunConfig.from_profile('strong-release')\n"
         "assert cfg.encoder.device == 'auto', cfg.encoder.device\n"
         "assert 'torch' not in sys.modules, 'torch импортирован при сборке конфига'\n"
         "print(cfg.encoder.device)\n"
@@ -149,10 +149,10 @@ def case_auto_device(tmp: Path) -> None:
     if done.returncode != 0:
         raise AssertionError(f"сборка конфига с device=auto: код {done.returncode}, "
                              f"stderr={done.stderr.strip()[-500:]}")
-    print(f"  ok: пресет full-qwen держит device=auto и не тянет torch при сборке конфига")
+    print(f"  ok: пресет strong-release держит device=auto и не тянет torch при сборке конфига")
 
     # штатный энкодер: кейс про `auto` у Qwen3VL-8B, а не про дефолт-heretic из base.yaml
-    cfg = RunConfig.from_profile("full-qwen").merged(**{"encoder.name": "base"})
+    cfg = RunConfig.from_profile("strong-release").merged(**{"encoder.name": "base"})
     enc = cfg.encoder
     if not enc.is_auto_device:
         raise AssertionError(f"EncoderConfig().device={enc.device!r}, ожидалось auto")
@@ -185,7 +185,7 @@ def case_auto_device(tmp: Path) -> None:
         raise AssertionError(f"имя записи по auto: {cfg.embeds_key(CROP, MD5, SHA)!r}")
 
     # Явный prefetch главнее умолчания (пользователь сказал «иное»).
-    custom = (RunConfig.from_profile("full-qwen")
+    custom = (RunConfig.from_profile("strong-release")
               .merged(**{"encoder.name": "base", "encoder.prefetch": 2}).encoder.resolved())
     if int(custom.prefetch) != 2:
         raise AssertionError(f"явный prefetch=2 перетёрт: {custom.prefetch!r}")

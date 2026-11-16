@@ -21,7 +21,7 @@
 (е) `io.image_sha("") == NOREF_SHA` и ключ эмбеддингов T2I содержит `noref` (записи T2I и записи
     с конкретным кадром не смешиваются).
 
-Ничего не грузит: ни весов, ни сети, ни GPU; файлов не пишет (кадр для (д) — из `imgs/`).
+Ничего не грузит: ни весов, ни сети, ни GPU; файлов не пишет (кадр для (д) — из `prompts/imgs/`).
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ from qwenstyle.config import RunConfig, prompt_md5  # noqa: E402
 from qwenstyle.registry import get_generation     # noqa: E402
 
 #: Вход с реальным файлом (2867x1612): пропорция 1.779 -> при `--resolution 1024` сетка 1376x768.
-INPUT_IMAGE = REPO_ROOT / "imgs" / "ire0nita-store.png"
+INPUT_IMAGE = REPO_ROOT / "prompts" / "imgs" / "ire0nita-store.png"
 PROMPT = "fusal style. [TASK: TEXT_IMAGE] test prompt for preflight"
 REQUIRES_IMAGE_CAPS = get_generation("qwen_image21").caps
 T2I_CAPS = replace(REQUIRES_IMAGE_CAPS, requires_image=False)
@@ -52,7 +52,7 @@ T2I_CAPS = replace(REQUIRES_IMAGE_CAPS, requires_image=False)
 
 def case_required_image_absent() -> None:
     """(а) модель с обязательным референсом без `--input` — понятная причина, не None."""
-    cfg = RunConfig.from_profile("preview-qwen", prompt=PROMPT, input="")
+    cfg = RunConfig.from_profile("base", prompt=PROMPT, input="")
     reason = pipeline.input_problem(cfg, REQUIRES_IMAGE_CAPS)
     assert reason, "requires_image=True без --input должен давать причину"
     assert "требует референс" in reason, f"в тексте нет 'требует референс': {reason!r}"
@@ -62,7 +62,7 @@ def case_required_image_absent() -> None:
 
 def case_t2i_square() -> None:
     """(б) T2I без входа: `--aspect 1:1` даёт квадрат 1024x1024 при `size_px=1024`."""
-    cfg = RunConfig.from_profile("preview-qwen", prompt=PROMPT, input="", size_px=1024,
+    cfg = RunConfig.from_profile("base", prompt=PROMPT, input="", size_px=1024,
                                  aspect="1:1")
     assert pipeline.input_problem(cfg, T2I_CAPS) is None, "T2I с --aspect обязан быть валиден"
     crop = cfg.crop(0, 0)
@@ -71,7 +71,7 @@ def case_t2i_square() -> None:
 
 def case_t2i_wide() -> None:
     """(б, продолжение) T2I без входа и `--aspect 16:9`: шире, чем выше, и кратно 16."""
-    cfg = RunConfig.from_profile("preview-qwen", prompt=PROMPT, input="", size_px=1024,
+    cfg = RunConfig.from_profile("base", prompt=PROMPT, input="", size_px=1024,
                                  aspect="16:9")
     assert pipeline.input_problem(cfg, T2I_CAPS) is None, "T2I с --aspect 16:9 обязан быть валиден"
     width, height = cfg.crop(0, 0)
@@ -82,7 +82,7 @@ def case_t2i_wide() -> None:
 
 def case_t2i_without_aspect() -> None:
     """(в) T2I без входа и без `--aspect` — взять пропорцию неоткуда, причина про `--aspect`."""
-    cfg = RunConfig.from_profile("preview-qwen", prompt=PROMPT, input="", aspect=None)
+    cfg = RunConfig.from_profile("base", prompt=PROMPT, input="", aspect=None)
     reason = pipeline.input_problem(cfg, T2I_CAPS)
     assert reason, "без --input и без --aspect причина обязана быть"
     assert "--aspect" in reason, f"причина должна называть --aspect: {reason!r}"
@@ -92,8 +92,8 @@ def case_t2i_without_aspect() -> None:
 
 def case_missing_file() -> None:
     """(г) `--input` задан, файла нет — причина до открытия картинки."""
-    missing = "imgs/__no_such_frame__.png"
-    cfg = RunConfig.from_profile("preview-qwen", prompt=PROMPT, input=missing)
+    missing = "prompts/imgs/__no_such_frame__.png"
+    cfg = RunConfig.from_profile("base", prompt=PROMPT, input=missing)
     reason = pipeline.input_problem(cfg, REQUIRES_IMAGE_CAPS)
     assert reason, "несуществующий --input обязан давать причину"
     assert missing in reason, f"причина должна называть путь: {reason!r}"
@@ -105,7 +105,7 @@ def case_existing_input_keeps_crop() -> None:
     from PIL import Image
 
     assert INPUT_IMAGE.is_file(), f"нет эталонного входа {INPUT_IMAGE}"
-    cfg = RunConfig.from_profile("preview-qwen", prompt=PROMPT, input=str(INPUT_IMAGE),
+    cfg = RunConfig.from_profile("base", prompt=PROMPT, input=str(INPUT_IMAGE),
                                  resolution=1024, size_px=None)
     assert pipeline.input_problem(cfg, REQUIRES_IMAGE_CAPS) is None, "существующий вход валиден"
     assert pipeline.input_problem(cfg, T2I_CAPS) is None, "T2I-бекенд с входом тоже валиден"
@@ -119,7 +119,7 @@ def case_noref_key() -> None:
     """(е) `image_sha("")` = sentinel, а ключ кэша T2I содержит `noref`."""
     assert io.image_sha("") == io.NOREF_SHA == "noref", f"image_sha('') = {io.image_sha('')!r}"
     assert io.image_sha("   ") == "noref", "пробельный путь тоже считается «без референса»"
-    cfg = RunConfig.from_profile("preview-qwen", prompt=PROMPT, input="", size_px=1024,
+    cfg = RunConfig.from_profile("base", prompt=PROMPT, input="", size_px=1024,
                                  aspect="1:1")
     key = cfg.embeds_key(cfg.crop(0, 0), prompt_md5(PROMPT), io.image_sha(cfg.input))
     assert "noref" in key, f"в ключе кэша нет noref: {key}"

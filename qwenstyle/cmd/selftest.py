@@ -39,8 +39,13 @@ NAME = "selftest"
 HELP = ("проверка установки: версии/CUDA/VRAM/RAM/диск, веса профиля и один рендер 480p/4 шага "
         "на синтетической картинке")
 
-#: Черновой пресет для пробного рендера: 480p, fp8-кэш базы, энкодер из base.yaml.
-RENDER_PRESET = "preview-qwen"
+#: Пресет для пробного рендера: базовое семейство (Qwen-Image-2.1, fp8-кэш `cache/models/fp8_transformer`,
+#: энкодер из base.yaml). Размер и шаги опускаются ниже: 480p и 4 шага — проба весов, а не кадр.
+RENDER_PRESET = "base"
+#: Высота пробного кадра (`size_px`): 480p — дешёвая проба на любом профиле.
+RENDER_SIZE = 480
+#: Групповой offload — чтобы проба влезала и в 8 ГиБ VRAM (`base` по умолчанию без offload).
+RENDER_OFFLOAD = "group"
 #: Промт лежит в репозитории (SFW-текст), кадр — нет: вход собирается кодом.
 PROMPT_FILE = "tests/texts/exp3.txt"
 #: Сторона синтетического входа: пропорция 1:1 -> conditioning 480×480 (высота = `size_px`).
@@ -226,6 +231,8 @@ def _render_section(args: argparse.Namespace) -> tuple[Section, bool, dict[str, 
     image.save(input_path)
     cfg = RunConfig.from_profile(RENDER_PRESET).merged(**{
         "generation.steps": RENDER_STEPS,
+        "generation.offload": RENDER_OFFLOAD,
+        "size_px": RENDER_SIZE,
         "input": str(input_path),
         "out": str(out_path),
         "prompt_file": str(REPO_ROOT / PROMPT_FILE),

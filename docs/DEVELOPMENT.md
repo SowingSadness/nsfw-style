@@ -10,7 +10,7 @@
 
 | публичное | внутреннее (может меняться без предупреждения) |
 |---|---|
-| 13 публичных пресетов (`weak-*`, `strong-*`, `flagship-*`) и профили машин (`qwenstyle/profiles.py`) | остальные пресеты (`base`, `turbo`, `preview-qwen`, `flux2`, `preview`, `demo`, `full-flux2`, `full-qwen`, `qwen-2k`, `h3-image`, `anime`, `qwen`) |
+| 13 публичных пресетов (`weak-*`, `strong-*`, `flagship-*`) и профили машин (`qwenstyle/profiles.py`) | остальные пресеты (`base`, `turbo`, `h3-image`, `flagship-r3-169`, `flagship-r3-43`) |
 | подкоманды `gen`, `run`, `selftest`, `env`, `models`, `cache`, `bench`, `config`, `compare-upscale` | внутренние функции `pipeline.run_batch`, `io.batch_paths`, `runlog`, `streaming`, `precision`, `cleanup` |
 | файлы `prompts/<имя>/prompt.txt` + `image*`, папка сессии `out/<имя>/gen-<штамп>/` | layout `cache/embeds` (`*.pt` + `.json`), `cache/models`, имена `fp8_transformer*` |
 | `RunConfig.from_profile(<имя>)`, флаги `gen`/`run`, `--set` по `ParameterSpec` | dev-бекенды (`flux2`, `seedvr2`) и их параметры |
@@ -30,13 +30,13 @@ dev-пресеты и dev-бекенды. Всё, что адресуется п
 |---|---|---|
 | `base` | `Qwen/Qwen-Image-2.1` + FUSAL R80, 25 шагов, fp8, энкодер `heretic` | корневой `extends` для всех остальных пресетов |
 | `turbo` | transformer из `Qwen/Qwen-Image-2.1-Turbo` + Turbo E6 R128, 8 шагов (расписание `sample_sigmas`) | быстрый distill-профиль; адаптер помечен авторами как preview |
-| `preview-qwen` | `extends: base`, `size_px: 480`, 8 шагов | дешёвый черновик Qwen для итераций по промту |
-| `anime` | `extends: base`, `size_px: 1080`, `lora.scale: 0.3`, энкодер пинит `base` | мягкий перенос стиля и легаси-имя кэша без `_te-*` |
-| `full-qwen` | `extends: base`, 1080p + ESRGAN до 1440 | нативный 1440p слишком дорогой (спилл активаций) |
-| `qwen-2k` | `extends: anime`, `size_px: 1440`, апскейл выключен | нативный 1440p для узких кадров |
-| `qwen` | алиас `base` | старое имя, оставлено чтобы не ломать скрипты |
 | `h3-image` | `MiniMaxAI/MiniMax-H3-Image` (33.13B), 6 шагов PDD, fp8 30.9 ГиБ + `offload: group`, энкодер Qwen3-VL-32B | T2I + edit одним пайплайном; база флагманских пресетов |
-| `flux2`, `preview`, `demo`, `full-flux2` | FLUX.2 klein (`Flux2KleinPipeline` + `Qwen3ForCausalLM`), `conditioning=internal` | **не для публики**: FLUX Non-Commercial License v2.1 |
+| `flagship-r3-169` | `extends: base`, **3 референса**, `size_px: 912` + `aspect: 16:9` → crop 1632x896, 25 шагов, `offload: group`, ESRGAN x2.41 → 3934x2160 | максимальный кадр на 16 ГиБ, который проходит энкодер при трёх референсах (`928p`/`1088p`/`1440p` — OOM на кодировании промта) |
+| `flagship-r3-43` | то же с `aspect: 4:3`, `size_px: 1056` → crop 1408x1056, ESRGAN x2.045 → 2880x2160 | там же; 4:3 при том же потолке площади даёт кадр выше (1072p — уже OOM) |
+
+Удалены (пресеты есть только в истории): `preview-qwen`, `anime`, `full-qwen`, `qwen-2k`, `qwen`,
+`flux2`, `preview`, `demo`, `full-flux2`. Бекенд `qwenstyle/backends/flux2.py` при этом остался —
+без пресетов он доступен только через `--set generation.backend=flux2` и прямую сборку `RunConfig`.
 
 ## 3. SeedVR2 — dev-опция
 

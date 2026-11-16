@@ -9,7 +9,7 @@
    у явного `device=cpu` по умолчанию — `False`; ключ кэша эмбеддингов (`embeds_key`, `cache_key_parts`)
    при `stream=True` **тот же**, что и при `stream=False` (стриминг — раскладка памяти, а не другая
    математика, R1); предупреждения «для base режим пропущен» больше нет — режим действует;
-2. FLUX.2-пресет (`preview`): `stream=False` по умолчанию, с `--set` — `True`, ключ кэша тоже не едет;
+2. базовый пресет (`base`): `stream=False` по умолчанию, с `--set` — `True`, ключ кэша тоже не едет;
 3. мини-энкодер из временного каталога, загруженный через `streaming.load_text_encoder(stream=True)`,
    отдаёт модель без хранилища в параметрах (пустые на `device`, 0 байт) и работающим forward,
    а его `hidden_states` **бит-в-бит** совпадают с обычной загрузкой;
@@ -135,30 +135,28 @@ def case_config_and_cache_key(tmp: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Кейс 2: FLUX.2-пресет (`preview`)
+# Кейс 2: базовый пресет (`base`) — `stream` по умолчанию выключен
 # --------------------------------------------------------------------------- #
 
-def case_flux2_preset(tmp: Path) -> None:
-    """`preview` (FLUX.2): `stream` по умолчанию False, с `--set` True, ключ кэша не едет."""
-    plain = RunConfig.from_profile("preview")
-    if plain.generation.backend != "flux2":
-        raise AssertionError(f"пресет preview не FLUX.2: backend={plain.generation.backend!r}")
+def case_preset_stream(tmp: Path) -> None:
+    """`base`: `stream` по умолчанию False, с `--set` True, ключ кэша не едет."""
+    plain = RunConfig.from_profile("base")
     if plain.encoder.stream is not False:
-        raise AssertionError(f"preview: encoder.stream={plain.encoder.stream!r} по умолчанию")
+        raise AssertionError(f"base: encoder.stream={plain.encoder.stream!r} по умолчанию")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        streamed = RunConfig.from_profile("preview").merged(**{"encoder.stream": "true"})
+        streamed = RunConfig.from_profile("base").merged(**{"encoder.stream": "true"})
     if streamed.encoder.stream is not True:
-        raise AssertionError(f"preview --set encoder.stream=true -> {streamed.encoder.stream!r}")
+        raise AssertionError(f"base --set encoder.stream=true -> {streamed.encoder.stream!r}")
     if buf.getvalue():
         raise AssertionError(f"для энкодера {plain.encoder.name!r} предупреждения быть не должно: "
                              f"{buf.getvalue()!r}")
     key_plain = plain.embeds_key((1376, 768), MD5, SHA)
     key_stream = streamed.embeds_key((1376, 768), MD5, SHA)
     if key_stream != key_plain:
-        raise AssertionError(f"ключ кэша FLUX.2 изменился от stream: {key_stream!r} != {key_plain!r}")
-    print(f"  ok: preview (FLUX.2, encoder={plain.encoder.name}): False -> True через --set, "
-          f"ключ {key_plain}")
+        raise AssertionError(f"ключ кэша базового пресета изменился от stream: "
+                             f"{key_stream!r} != {key_plain!r}")
+    print(f"  ok: base (encoder={plain.encoder.name}): False -> True через --set, ключ {key_plain}")
 
 
 # --------------------------------------------------------------------------- #
@@ -235,7 +233,7 @@ def case_streamed_encoder_placement(tmp: Path) -> None:
     fixtures.build_tiny(root)                    # config.json + model.safetensors (фикстура шага 1)
     # `encoder.device` явно cpu: после перевода пресета на `auto` резолв дал бы cuda,
     # а этот кейс проверяет размещение/move_to, а не GPU-путь (тест должен работать и без CUDA).
-    stream_cfg = RunConfig.from_profile("preview").merged(**{
+    stream_cfg = RunConfig.from_profile("base").merged(**{
         "encoder.stream": "true",
         "encoder.device": "cpu",
         "encoder.local_dir": str(root),
@@ -659,8 +657,8 @@ def case_base_stream_effective(tmp: Path) -> None:
 CASES: tuple[tuple[str, Callable[[Path], None]], ...] = (
     ("1. encoder.stream: конфиг, умолчание, ключ кэша не меняется, предупреждения для base нет",
      case_config_and_cache_key),
-    ("2. FLUX.2-пресет preview: stream False -> True, ключ кэша не меняется",
-     case_flux2_preset),
+    ("2. базовый пресет base: stream False -> True, ключ кэша не меняется",
+     case_preset_stream),
     ("3. мини-энкодер: stream-загрузка даёт параметры без хранилища и бит-в-бит forward",
      case_mini_encoder),
     ("4. B1: стриминговый энкодер из flux2._load_text_encoder + move_to не падают",

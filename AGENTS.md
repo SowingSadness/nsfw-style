@@ -168,13 +168,14 @@ hf cache verify <repo>                                  # целостность
 | пресет | что это | модель / шаги / кэш точности |
 |---|---|---|
 | `base` | профиль по умолчанию: R80 v2 | `Qwen/Qwen-Image-2.1`, 25 шагов, fp8, `cache/fp8_transformer` |
-| `preview-qwen` | черновик Qwen для итераций по промту | `extends: base`, `size_px: 480` (864×480 при 16:9), 8 шагов |
 | `turbo` | distill-профиль | transformer из `Qwen/Qwen-Image-2.1-Turbo` + Turbo E6 R128 LoRA, 8 шагов (расписание `sample_sigmas`), `cache/fp8_transformer_turbo` |
-| `flux2` | базовый FLUX.2 klein | `Flux2KleinPipeline` + `Qwen3ForCausalLM`, `conditioning=internal`, `image_inputs=multi`, fp8, `cache/fp8_transformer_flux2` |
-| `preview` | черновик FLUX.2 | `extends: flux2`, `size_px: 768` (1376×768), 8 шагов, offload не нужен (33 с) |
-| `demo` | быстрая демонстрация | `extends: flux2`, `size_px: 960` + ESRGAN до `target_height: 1440` → 2592×1440 за ~61 с |
-| `full-flux2` | финальный кадр FLUX.2 | `extends: flux2`, `size_px: 1440` (2592×1440) + `offload: group`, `offload_blocks: 2` → 121 с, пик VRAM 15.7 GiB |
 | `h3-image` | MiniMax-H3-Image: T2I и edit одним пайплайном | `MiniMaxAI/MiniMax-H3-Image` (33.13B), 6 шагов PDD, fp8 (30.9 GiB) + `offload: group`, `cache/fp8_transformer_h3_image`, LoRA нет, энкодер Qwen3-VL-32B (`h3qwen32-heretic`) |
+| `flagship-r3-169` | 3 референса, 16:9, максимум на 16 ГиБ | `extends: base`, `size_px: 912` + `aspect: 16:9` → crop 1632×896, 25 шагов, `offload: group`, ESRGAN ×2.41 → 3934×2160 |
+| `flagship-r3-43` | то же для 4:3 | `extends: base`, `size_px: 1056` + `aspect: 4:3` → crop 1408×1056, ESRGAN ×2.045 → 2880×2160 |
+
+Пресетов FLUX.2 (`flux2`, `preview`, `demo`, `full-flux2`) в наборе больше нет: бекенд
+`backends/flux2.py` остался, но пресеты удалены вместе с остальными dev-надстройками
+(`anime`, `preview-qwen`, `full-qwen`, `qwen-2k`, `qwen`), поэтому `gen --preset` их не знает.
 
 Политика кэша эмбеддингов (важно):
 - **одна запись на каждое разрешение**, разные разрешения сосуществуют и **никогда не удаляются
@@ -322,7 +323,7 @@ VRAM после загрузки: **9.0/16.0 GiB**; RSS **1.4 GiB** на быс�
 | **768p** | 1024 (default) | 1376×768 | 4128 | финал: 25 шагов ≈ 36–44 с, пик 15.5–15.8 GiB |
 | **864p** | 1152 | 1536×864 | 5184 | не замерялось (вероятно без offload впритык) |
 | **960p** | 1280 | 1696×960 | 6360 | только с `--offload group`: 25 шагов ≈ **66 с**, пик **10.8 GiB**; без offload = OOM |
-| **1080p** | 1251 (ratio 1.342) | 1440×1088 | 6120 | `full-qwen`: 25 шагов **66–67 s**, плато **2.41–2.43 s/шаг** (среднее 2.52), `[done] total 75 s` без поста; пик процесса ≈**9.6 GiB** (nvidia-smi 11.14) — спилла нет |
+| **1080p** | 1251 (ratio 1.342) | 1440×1088 | 6120 | 25 шагов **66–67 s**, плато **2.41–2.43 s/шаг** (среднее 2.52), `[done] total 75 s` без поста; пик процесса ≈**9.6 GiB** (nvidia-smi 11.14) — спилла нет |
 | **1088p** | ~1440 | 1920×1088 | 8160 | `--offload group`, ожидается ~13 GiB (не замерено) |
 | **1440p** | ~1663 | 1920×1440 | 10800 | нативно: **16–17 s/шаг** (25 шагов ≈ 7 мин), `free=0` → спилл активаций; до исправления было **73.9 s/шаг** (см. ниже) |
 
@@ -873,8 +874,8 @@ done
    `text_embeds`) и 201 s холодного edit — кадры сравнивать сериями, а не по одному.
 
 **Правило размера финального кадра.** Финал 1440p = рендер **1080p** (1440×1088, 25 шагов
-**66–67 s**, `[done] total 75 s`) + ESRGAN ×1.32 до 1906×1440 — это дефолт `full-qwen`
-(`size_px: 1080`, `upscale.target_height: 1440`). Нативный 1440p (1920×1440, 10800 токенов) —
+**66–67 s**, `[done] total 75 s`) + ESRGAN ×1.32 до 1906×1440 — это связка
+`size_px: 1080` + `upscale.target_height: 1440`. Нативный 1440p (1920×1440, 10800 токенов) —
 **16–17 s/шаг** (25 шагов ≈ 7 мин, ×6.5 к 1080p) из-за спилла активаций: он оправдан только
 для узких кадров (<2.2 МП) и при свободной RAM (перед прогоном проверить `RAM available ≈ 49 GiB`,
 иначе s/шаг уходит в 70 — см. §4).
