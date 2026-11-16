@@ -21,7 +21,7 @@
 (е) `io.image_sha("") == NOREF_SHA` и ключ эмбеддингов T2I содержит `noref` (записи T2I и записи
     с конкретным кадром не смешиваются).
 
-Ничего не грузит: ни весов, ни сети, ни GPU; файлов не пишет (кадр для (д) — из `prompts/imgs/`).
+Ничего не грузит: ни весов, ни сети, ни GPU; файлов не пишет (кадр для (д) — из `prompts/nita-atomic/refs/`).
 """
 from __future__ import annotations
 
@@ -39,8 +39,8 @@ from qwenstyle import io, pipeline                # noqa: E402 — после п
 from qwenstyle.config import RunConfig, prompt_md5  # noqa: E402
 from qwenstyle.registry import get_generation     # noqa: E402
 
-#: Вход с реальным файлом (2867x1612): пропорция 1.779 -> при `--resolution 1024` сетка 1376x768.
-INPUT_IMAGE = REPO_ROOT / "prompts" / "imgs" / "ire0nita-store.png"
+#: Вход с реальным файлом (1453x1083): пропорция 1.342 -> при `--resolution 1024` сетка 1184x896.
+INPUT_IMAGE = REPO_ROOT / "prompts" / "nita-atomic" / "refs" / "image1.png"
 PROMPT = "fusal style. [TASK: TEXT_IMAGE] test prompt for preflight"
 #: `qwen_image21` умеет T2I (`requires_image=False`), поэтому «референс обязателен» — это
 #: заглушка того же бекенда: ветка проверяется на свойстве caps, а не на имени модели.
@@ -113,8 +113,8 @@ def case_existing_input_keeps_crop() -> None:
     assert pipeline.input_problem(cfg, REQUIRES_IMAGE_CAPS) is None, "существующий вход валиден"
     assert pipeline.input_problem(cfg, T2I_CAPS) is None, "T2I-бекенд с входом тоже валиден"
     in_size = Image.open(INPUT_IMAGE).size
-    assert cfg.crop(*in_size) == (1376, 768), \
-        f"crop 2867x1612 при --resolution 1024 поехал: {cfg.crop(*in_size)}"
+    assert cfg.crop(*in_size) == (1184, 896), \
+        f"crop {in_size[0]}x{in_size[1]} при --resolution 1024 поехал: {cfg.crop(*in_size)}"
     assert cfg.frame_ratio(*in_size) == in_size[0] / in_size[1], "пропорция входа искажена"
 
 
