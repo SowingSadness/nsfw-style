@@ -1,4 +1,4 @@
-# flagship-preview: 16 GB VRAM / 64 GB RAM — черновик 768p на базовом Qwen без LoRA (FUSAL 0.0).
+# VRAM16-preview: 16 GB VRAM / 64 GB RAM — черновик 768p на базовом Qwen без LoRA (FUSAL 0.0).
 # 768p (1376x768 при 16:9) без offload — самая быстрая сетка (~12-15 s на 8 шагах); финал
 # на 1440p стоит в разы дороже, поэтому композицию и промт проверяют здесь.
 # Цепочка: 768p native -> (апскейла нет, factor 0) -> 1376x768 черновик.
@@ -15,6 +15,7 @@ encoder:
 generation:
   steps: 8
   offload: none           # 768p влезает без offload (пик 15.5 ГиБ)
+  kv_cache: offload    # KV префикса в RAM: при 960p/1440p он занимает 3.7–7.8 ГиБ VRAM и выбивает тариф; бит-в-бит, +13 % времени (docs/bench/kv-cache-offload.md)
   precision_cache: cache/models/fp8_transformer
   sampler_kwargs:
     offload_blocks: 1

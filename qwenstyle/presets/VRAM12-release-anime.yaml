@@ -1,0 +1,28 @@
+# VRAM12-release-anime: 12 GB VRAM / 32 GB RAM — финальный кадр 960p + FUSAL 0.7, 25 шагов.
+# 960p (1696x960 при 16:9) требует `offload: group` (без него OOM), KV префикса — в RAM.
+# `upscale: null` — кадр отдаётся native 1696x960 (включить: `--upscale 1.5`).
+# 25 шагов — полный профиль базовой модели; LoRA 0.7 — диапазон переноса стиля (AGENTS.md §5.6).
+# Энкодер heretic — `auto` (GPU + конвейер стриминга на CUDA).
+extends: base
+
+encoder:
+  name: heretic
+  cache_tag: heretic
+  device: auto
+  stream: true
+  prefetch: 4
+
+generation:
+  steps: 25
+  offload: group
+  kv_cache: offload    # KV префикса в RAM: при 960p/1440p он занимает 3.7–7.8 ГиБ VRAM и выбивает тариф; бит-в-бит, +13 % времени (docs/bench/kv-cache-offload.md)
+  precision_cache: cache/models/fp8_transformer
+  sampler_kwargs:
+    offload_blocks: 1
+  lora:
+    scale: 0.7
+
+size_px: 960              # 960p: 1696x960 при 16:9
+
+upscale: null              # без апскейла: native 960p (у VRAM16 — 1440p). Включить: --upscale 1.5
+                           # или --set upscale.target_height=…; factor: 0 сам апскейл НЕ выключает

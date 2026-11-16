@@ -1,4 +1,4 @@
-# flagship-4k-fast: 16 GB VRAM / 64 GB RAM — быстрый 4K: рендер 1088p вместо нативных 1440p.
+# VRAM16-4k-fast: 16 GB VRAM / 64 GB RAM — быстрый 4K: рендер 1088p вместо нативных 1440p.
 # 1088p (1920x1088 при 16:9, 8160 токенов) идёт ~66 s на 25 шагов против ~7 мин у 1440p:
 # активации без спилла, тот же `offload: group` (1920x1088 без него не влезает).
 # Цепочка: 1088p native -> ESRGAN x1.985 (2160 / 1088) -> ~3810x2160; апскейл ~3 s.
@@ -15,6 +15,7 @@ encoder:
 generation:
   steps: 25
   offload: group
+  kv_cache: offload    # KV префикса в RAM: при 960p/1440p он занимает 3.7–7.8 ГиБ VRAM и выбивает тариф; бит-в-бит, +13 % времени (docs/bench/kv-cache-offload.md)
   precision_cache: cache/models/fp8_transformer
   sampler_kwargs:
     offload_blocks: 1
@@ -26,4 +27,4 @@ size_px: 1088             # 1088p: 1920x1088 при 16:9
 upscale:
   backend: esrgan
   factor: 0               # фактор считается из target_height: 2160 / 1088 = 1.985
-  target_height: 2160     # тот же 4K-целевой кадр, что у `flagship-release`
+  target_height: 2160     # тот же 4K-целевой кадр, что у `VRAM16-release`

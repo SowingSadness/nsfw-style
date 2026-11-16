@@ -45,7 +45,7 @@ generation:
 
 upscale:
   backend: esrgan           # x4plus_anime_6B; seedvr2 — флагом --upscale-backend seedvr2
-  factor: 0.0               # 0 = апскейл выключен
+  factor: 0.0               # множитель; выключить апскейл целиком — upscale: null (или --upscale=null), иначе target_height пресета главнее
   weights: cache/weights/RealESRGAN_x4plus_anime_6B.pth
   tile: 256                 # тайлы — только esrgan (seedvr2 работает целым кадром)
   pad: 32                   # только esrgan
