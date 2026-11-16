@@ -45,48 +45,57 @@ Linux / macOS:
 ```text
 prompts/
   my-scene/
-    prompt.txt      # текст промта, имя файла фиксировано
-    image1.png      # референс; можно до 10: image1…image10.*
-    image2.jpg
+    refs/               # референсы: любые имена, до 10 файлов
+      01-face.png
+      02-room.jpg
+    prompt-qwen.txt     # промт Qwen (tag сессии — qwen)
+    prompt-h3.txt       # опционально: промт H3 (tag — h3)
+    project.yaml        # опционально: preset + параметры запуска (см. ниже)
 ```
 
-- Расширения референсов: `.png`, `.jpg`, `.jpeg`, `.webp`.
-- Порядок — по номеру в имени: `image2` идёт раньше `image10` (естественная сортировка).
+- Расширения референсов: `.png`, `.jpg`, `.jpeg`, `.webp`; имена файлов любые.
+- Порядок — natural sort по имени: `2-x.png` раньше `10-x.png`; он же задаёт `<image1>`, `<image2>`.
+- Дубликат имени (`a.png` + `a.jpg`) — берётся первый, в лог пишется предупреждение.
 - Больше 10 картинок — берутся первые 10, в лог пишется, кого отбросили (предел модели).
 - Картинок может не быть вовсе — для моделей с поддержкой T2I (тогда пропорцию кадра задаёт `--aspect`,
   без него — `1:1`).
 
+`project.yaml` — необязательный конфиг проекта: `preset` именем/путём или inline-пресетом
+(`preset: {extends: base, size_px: 960}`), `prompt`, `refs`, `out`, `seeds`/`count` и любые поля
+`RunConfig` (`aspect`, `generation: {steps: 8}`, `upscale: {factor: 1.5}`). Флаги CLI главнее yaml.
+
 ### 3. Сгенерируйте
 
 ```bash
-python -m qwenstyle gen --preset VRAM12 --prompt my-scene --count 4
+python -m qwenstyle gen --preset VRAM12 --prompt my-scene/prompt-qwen --count 4
 ```
 
 Вместо `--count 4` можно перечислить сиды: `--seeds 84,32-38`. Если не указать ни то, ни другое —
-будет один случайный сид (он печатается и попадает в имя файла).
+будет один случайный сид (он печатается и попадает в имя файла). `--project my-scene/project.yaml`
+заменяет `--preset` (и любые другие настройки) значениями из конфига проекта.
 
-Результат — папка сессии `out/my-scene/gen-20261115-1940/`:
+Результат — папка сессии `prompts/my-scene/out/202611162054-qwen/`:
 
 ```text
-out/my-scene/gen-20261115-1940/
-  s84.png  s85.png  s86.png  s87.png   # кадры (с апскейлом до целевой высоты профиля)
-  s84-gen.png …                        # чистая генерация, если апскейл включён
-  run.log                              # весь вывод прогона: [plan], [cache], [gen], [post], [done]
-  meta.json                            # параметры прогона, argv, время
+prompts/my-scene/out/202611162054-qwen/
+  84-25.png  85-25.png  86-25.png  87-25.png   # кадры: <seed>-<steps> (после апскейла)
+  84-25-gen.png …                             # чистая генерация, если апскейл включён
+  84-25.log                                   # весь вывод этого кадра: [plan], [cache], [gen], [done]
+  84-25-meta.json                             # параметры и тайминги кадра (+ проект и промт)
 ```
 
 Как это выглядит в консоли (числа — с нашей машины, см. таблицу пресетов):
 
 ```text
-[gen] сессия out/my-scene/gen-20261115-1940
+[gen] проект prompts/my-scene (только CLI)
 [gen] пресет VRAM12-release · backend qwen_image21 · 25 шагов · lora 0 · энкодер heretic
-[gen] промт prompts/my-scene/prompt.txt (md5 4819c8e1ddc4)
-[gen] референсов 1: image1.png
+[gen] промт prompts/my-scene/prompt-qwen.txt (md5 4819c8e1ddc4)
+[gen] референсы 1: 01-face.png → <image1>
 [gen] сиды 4: <четыре случайных сида печатаются здесь>
-[plan] input prompts/my-scene/image1.png (768x768, 1 референс) -> crop 960x960
-[plan] upscale пропущен: апскейл выключен (factor=0) -> out 960x960
+[gen] сессия prompts/my-scene/out/202611162054-qwen
+[plan] input prompts/my-scene/refs/01-face.png (768x768, 1 референс) -> crop 960x960
 [gen] seed <N>: <время>s 960x960 peak 6.2 GiB
-[gen] итог: 4 кадр(ов) в out/my-scene/gen-20261115-1940 · всего <сумма>s · среднее <…>s/кадр
+[gen] итог: 4 кадр(ов) в prompts/my-scene/out/202611162054-qwen · всего <сумма>s · среднее <…>s/кадр
 ```
 
 ## Модели здесь не хостятся
@@ -158,29 +167,33 @@ page cache — медленнее (6.5–8.1 против 19.5–21.2 ГиБ/с)
 ## Справочник `gen`
 
 ```text
-python -m qwenstyle gen [--preset PRESET] [--prompt NAME] [--seeds SPEC | --count N]
+python -m qwenstyle gen [--preset PRESET] [--prompt NAME | --project PATH]
+                        [--out DIR] [--seeds SPEC | --count N]
                         [--aspect R] [--upscale F|null] [--set KEY=VALUE] [--dry-run] [--no-logs]
 ```
 
 | флаг | что делает |
 |---|---|
 | `--preset` | тариф/пресет. Шорткаты: `VRAM8`/`VRAM12`/`VRAM16` = `<тариф>-release`; `VRAM12-preview`, `VRAM12-release`, `VRAM12-preview-anime`, `VRAM12-release-anime`, `VRAM12-anime` = `VRAM12-release-anime`; `VRAM16-4k-fast`; либо точное имя любого пресета из `qwenstyle/presets/` |
-| `--prompt NAME` | папка `prompts/NAME/`: `prompt.txt` (текст) + `image*.png\|jpg\|jpeg\|webp` (до 10 референсов) |
+| `--prompt NAME` | проект промта: `<project>/<prompt-stem>` (например `my-scene/prompt-qwen`, `.txt` можно опустить) или `<project>`, если в нём ровно один `*.txt`. Референсы — `<project>/refs/`, результаты — `<project>/out/` |
+| `--project PATH` | `project.yaml` (файл, каталог или имя проекта в `prompts/`): preset + любые поля `RunConfig`; флаги CLI главнее yaml. `--project` + `--prompt` меняет только промт |
+| `--out DIR` | каталог **сессий** (по умолчанию `<project>/out`); сессия — `<YYYYMMDDHHMM>-<tag>` внутри него |
 | `--count N` | N случайных сидов (печатаются), взаимоисключающе с `--seeds` |
 | `--seeds SPEC` | явные сиды: `84`, `32-38`, `1,7,42`; без обоих флагов — один случайный сид |
 | `--aspect R` | пропорция кадра (`16:9`, `4:3`, `1:1`) вместо пропорции первого референса; для T2I без флага — `1:1` |
-| `--upscale F\|null` | число — множитель апскейла (`target_height` пресета главнее); `null`/`none`/`off` — выключить апскейл целиком (native-кадр, без `s{N}-gen.png`) |
+| `--upscale F\|null` | число — множитель апскейла (`target_height` пресета главнее); `null`/`none`/`off` — выключить апскейл целиком (native-кадр, без `<seed>-<steps>-gen.png`) |
 | `--set KEY=VALUE` | точечный параметр `RunConfig` (можно повторять); неизвестный ключ отбивается кодом 2 со списком допустимых параметров бекенда |
 | `--dry-run` | только план: сетка, ключ кэша эмбеддингов, будет ли энкод, апскейл, папка сессии; веса не грузятся |
-| `--no-logs` | не писать `run.log` в папку сессии (кадры и `meta.json` остаются) |
+| `--no-logs` | не писать `<кадр>.log` (кадры и `<кадр>-meta.json` остаются) |
 
-Что происходит с картинками: референсы сортируются естественно (`image2` < `image10`), лишние
+Что происходит с картинками: референсы из `refs/` сортируются естественно (`2-x` < `10-x`), лишние
 сверх `max_images` бекенда (у Qwen-Image-2.1 и H3 — 10) отбрасываются с записью в лог. Кроп кадра
 считается по **первому** референсу; пропорция — по нему же, если не задан `--aspect`.
 
-Имена файлов: `s{seed}.png` — итоговый кадр (после апскейла), `s{seed}-gen.png` — чистая генерация,
-она появляется только когда апскейл действительно включён. Один прогон = одна папка
-`out/<имя>/gen-YYYYMMDD-HHMM/` (`-2` при коллизии минуты), `run.log` и `meta.json` — в корне папки.
+Имена файлов: `<seed>-<steps>.png` — итоговый кадр (после апскейла), `<seed>-<steps>-gen.png` —
+чистая генерация, она появляется только когда апскейл действительно включён; рядом лежат
+`<seed>-<steps>.log` и `<seed>-<steps>-meta.json`. Сессия —
+`prompts/<project>/out/<YYYYMMDDHHMM>-<tag>/` (`-2` при коллизии минуты).
 
 Смотреть на кадры «пачкой» дешевле, чем по одному: внутри одной сетки `--seeds`/`--count`, `--steps`
 и `--lora-scale` бесплатны (кэш эмбеддингов тот же), платится только генерация.
@@ -233,11 +246,11 @@ python -m qwenstyle gen [--preset PRESET] [--prompt NAME] [--seeds SPEC | --coun
   GPU-энкод — 15–16 с, то есть 15–20 % прогона.
 
 **Выключатель апскейла.** `upscale: null` в пресете или `--upscale=null` в `run`/`gen` выключает
-апскейл **целиком**: кадр отдаётся native, пары `s{N}-gen.png` не появляется (именно так работают
+апскейл **целиком**: кадр отдаётся native, пары `<seed>-<steps>-gen.png` не появляется (именно так работают
 `VRAM12-release*` и `VRAM16-release*`). `factor: 0` сам по себе апскейл **не выключает** —
 `target_height` пресета главнее, поэтому `--upscale 0` при `upscale.target_height: 1440` всё равно
 гонит ESRGAN (1440 / 1088 → ×1.32); выключить — `--upscale=null` или
-`--set upscale.target_height=0`. Пары `s{N}-gen.png` появляются только при включённом апскейле:
+`--set upscale.target_height=0`. Пары `<seed>-<steps>-gen.png` появляются только при включённом апскейле:
 u `VRAM8-release*`, `VRAM16-4k-fast`, `VRAM16-r3-*` и при явном `--upscale F`.
 
 ## KV-кеш референсов (`kv_cache`)
@@ -349,7 +362,7 @@ fp8-кэша профиля и делает один дешёвый рендер
 
 Код пакета — MIT (`LICENSE`). Веса моделей — под их лицензиями (таблица выше). Инференс локальный:
 кадры, промты и логи никуда не отправляются, у diffusers нет телеметрии; наружу уходят только
-скачивания весов с HuggingFace. `run.log` и `meta.json` в папке сессии содержат промт и пути —
+скачивания весов с HuggingFace. `<кадр>.log` и `<кадр>-meta.json` содержат промт и пути —
 это локальные файлы для отладки; не нужны — `--no-logs` (или удалить папку).
 
 ## Про `bootstrap.ps1` напрямую

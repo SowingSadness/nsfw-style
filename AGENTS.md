@@ -88,8 +88,9 @@ K/V в RAM (иначе OOM)**. `VRAM12-*` и `VRAM16-*` пинят `kv_cache: of
 задачей (см. R2), `cmd/*` — подкоманды, `backends/*` — модели (в т.ч. `minimax_h3_image.py` —
 MiniMax-H3-Image: T2I + edit на модульном пайплайне diffusers), `presets/*.yaml` — данные
 (в т.ч. `h3-image.yaml`);
-`prompts/exp1..4.txt` — эталоны промтов (см. §5); `prompts/<имя>/` — формат входа `gen` (`prompt.txt` +
-`image*.png|jpg|jpeg|webp`, до `max_images` референсов);
+`prompts/<project>/` — проект промта `gen`: `refs/` (все `*.png|jpg|jpeg|webp`, порядок = natural
+sort), `prompt-<model>.txt`, опциональный `project.yaml` и `out/<YYYYMMDDHHMM>-<tag>/` (кадры
+`<seed>-<steps>.png|.log|-meta.json`); эталоны промтов — `tests/texts/exp*.txt` (см. §5);
 `cache/embeds/` — кэш эмбеддингов, `cache/models/` — квантование и веса энкодеров;
 `hf-cache/` — веса; `out/` — результаты (`out/tests/` — только артефакты тестов); `tests/` — обычные скрипты-проверки (pytest в venv нет и
 ставить нельзя; успех = `ALL PASS` + exit 0, без CUDA скрипт печатает `SKIP`);
@@ -139,15 +140,19 @@ MiniMax-H3-Image: T2I + edit на модульном пайплайне diffuser
 команда не правит ядро. Минимальный контракт:
 
 ```
-python -m qwenstyle gen --preset VRAM12 --prompt <имя> [--seeds 84,32-38 | --count N]
-                                # главная точка входа: папка prompts/<имя>/ (prompt.txt + image*)
-                                # -> out/<имя>/gen-YYYYMMDD-HHMM/ (кадры, run.log, meta.json в корне)
-                                # --dry-run — план без весов; --no-logs — без run.log
+python -m qwenstyle gen --preset VRAM12 --prompt <project>/<prompt-stem> [--seeds 84,32-38 | --count N]
+                                # главная точка входа: проект prompts/<project>/ (refs/ + prompt-<model>.txt)
+                                # --project <yaml> — preset + любые поля RunConfig (флаги CLI главнее)
+                                # --out DIR — каталог сессий (по умолчанию <project>/out)
+                                # -> <out>/<YYYYMMDDHHMM>-<tag>/<seed>-<steps>.png|.log|-meta.json
+                                # --dry-run — план без весов; --no-logs — без .log (meta остаётся)
 python -m qwenstyle run [--preview | --size 768p | --resolution N] [--aspect 16:9|4:3|1:1|2:3] [--prompt-file ...] [--input ...] --out ...
                                 # одиночный кадр: все флаги старого run_style.py + --config/--set
                                 # --input необязателен: нужен ли референс, решает `Capabilities.requires_image`
                                 # --dry-run (план без весов)
-                                # лог: <кадр>/run.log + meta.json рядом с кадром; --no-logs — не создавать
+                                # --out каталог -> <cat>/<seed>-<steps>.png (+ .log, -meta.json рядом),
+                                # --out файл *.png -> к имени добавятся -<seed>-<steps> [-x{factor}]
+                                # --no-logs — без .log (meta остаётся)
 python -m qwenstyle selftest --profile VRAM8|VRAM12|VRAM16   # установка: окружение, веса профиля, рендер 480p/4 шага
 python -m qwenstyle env         # версии, CUDA/GPU/VRAM/RAM, offline-режим, счётчики кэшей, свободный диск
 python -m qwenstyle models list|probe <repo> [--offline]   # реестр бекендов и зондирование без скачивания
@@ -218,11 +223,11 @@ hf cache verify <repo>                                  # целостность
 Требования к CLI: `--help` у каждой подкоманды, значения по умолчанию = проверенные (см. §4),
 никаких интерактивных подтверждений для read-only операций, удаление — только с явным флагом.
 
-Логи прогона: `run` кладёт отладочный лог в подпапку кадра — `<кадр>/run.log` +
-`<кадр>/meta.json` (папка = путь кадра без расширения, `qwenstyle/runlog.py`), а `gen` — один
-`run.log` + `meta.json` в корне папки сессии `out/<имя>/gen-<штамп>/`. Выключается `--no-logs`
-(или `logs: false` в пресете). Лог — наблюдение: ключ кэша эмбеддингов и кадр от него не зависят,
-ошибка записи не роняет прогон;
+Логи прогона: и `run`, и `gen` кладут лог и meta **рядом с кадром и по его имени** —
+`<кадр>.log` и `<кадр>-meta.json` (`qwenstyle/runlog.py`). В `gen` у каждого seed'а свой `.log`
+(общий заголовок `[plan]`/prepare копируется в каждый), общих `run.log`/`meta.json` больше нет.
+`--no-logs` (или `logs: false` в пресете) выключает только `.log`; meta пишется всегда.
+Лог — наблюдение: ключ кэша эмбеддингов и кадр от него не зависят, ошибка записи не роняет прогон;
 `bench`/`selftest`/тесты ходят в `pipeline.run(..., log=None)` и папок не оставляют. Тесты
 пишут результаты только в `out/tests/`, а промт берут из `tests/texts/exp1.txt` (не из `prompts/`,
 он в `.gitignore`).
@@ -637,10 +642,10 @@ pinned 6.6–8.5 GiB весов fp8-трансформера. Сейчас он 
   **max diff 7** (из 255) к прогону всего кадра — это не ошибка, а свойство тайлового режима
   (старый `upscale.py` давал ровно то же); при `tile=128` нужен `pad=32`;
 - в `gen` ширина финального кадра считается по пропорциям **готового** кадра: чистая генерация
-  лежит рядом как `s{N}-gen.png`, а `s{N}.png` — уже апскейленная;
+  лежит рядом как `<seed>-<steps>-gen.png`, а `<seed>-<steps>.png` — уже апскейленная;
 - замеры: 864×480 → 3456×1920 за 0.4 с, 1376×768 → 5504×3072 за 1.5 с, пик VRAM апскейлера < 1 ГиБ;
 - перед ESRGAN пайплайн освобождается (`del pipe` + `gc` + `empty_cache`): иначе пик 16 ГиБ + апскейлер = OOM. Общий пик прогона с апскейлом — 8.5 ГиБ (измерено);
-- в имя файла добавляется `-x{2|4}` вместе с `-s{seed}`, чтобы gen- и out-файлы не сталкивались.
+- в имя файла добавляется `-x{2|4}` вместе с `-<seed>-<steps>`, чтобы gen- и out-файлы не сталкивались.
 
 `--upscale-backend seedvr2` — SeedVR2-3B (ByteDance), **dev-опция, не входит в публичные профили**
 (в публичных пресетах только `esrgan`, см. `docs/DEVELOPMENT.md`):
@@ -654,7 +659,7 @@ pinned 6.6–8.5 GiB весов fp8-трансформера. Сейчас он 
   864×480 → 1728×960: **62 с** через пайплайн (включая загрузку 3B) и 71 с автономно;
   **x3 (2592×1440) работает**, **x4 (3456×1920) — OOM** по активациям (запрос 6.33 ГиБ) даже с fp8-весами;
 - fp8-файл 3B из `Comfy-Org/SeedVR2` (`a0226eaa…`) сюда не подходит — официальный код читает `.pth`;
-- в имя файла добавляется `-xN` и `-s{seed},` как и у ESRGAN.
+- в имя файла добавляется `-xN` и теги `-<seed>-<steps>`, как и у ESRGAN.
 
 **MiniMax-H3-Image (`--config h3-image`).** 33.13B трансформер (50 слоёв, hidden 5376, `in_channels 24`,
 `patch [1,2,2]`, `text_dim 5120`) + VAE 2.2 GiB / 584M (24 латентных канала) + энкодер Qwen3-VL-32B.
@@ -805,7 +810,9 @@ fusal style.
   с полным набором параметров. Любая правка формулировки или другой входной файл = miss и
   **6–35 с GPU-кодирования** Qwen3VL-8B (35 s cold @640×480, 6 s warm @1440×1088); на CPU
   (`--set encoder.device=cpu`) — 55 с @864×480 … 255 с @1376×768.
-- Финальные формулировки держать в `prompts/` и подавать через `--prompt-file`, а не править в скрипте.
+- Финальные формулировки держать в проекте — `prompts/<project>/prompt-<model>.txt` (вызов
+  `gen --prompt <project>/<stem>`); низкоуровневый `run` по-прежнему принимает `--prompt-file`.
+  В скрипте промт не править.
 - Полный разбор экономики кэша и порядка итераций — §6; правила написания промтов — §5 и
   `.pi/skills/fusal-prompt/SKILL.md` (там же тиры, блоки T2I/I2I, R18-вариант и режимы правки).
 
@@ -899,17 +906,17 @@ done
 из-за спилла активаций (§4).
 
 Апскейл включается и выключается блоком: `upscale: null` в пресете или `--upscale=null`
-в `run`/`gen` выключает его **целиком** (native-кадр, пары `s{N}-gen.png` нет). `factor: 0` сам по
+в `run`/`gen` выключает его **целиком** (native-кадр, пары `<seed>-<steps>-gen.png` нет). `factor: 0` сам по
 себе **не выключает**: `target_height` пресета главнее, поэтому `--upscale 0` при
 `upscale.target_height: 1440` всё равно гонит ESRGAN (1440 / 1088 → ×1.32); выключить —
 `--upscale=null` или `--set upscale.target_height=0`. Автоматический пропуск: если кадр уже не ниже
 `upscale.target_height` или фактор ≈ 1, бекенд не загружается, печатается
 `[post] upscale пропущен: …`, суффикс `-x1` в имени не появляется.
 
-Серия кадров по seed'ам — `python -m qwenstyle gen --preset VRAM12 --prompt <имя> --count 9`
-(или `--seeds 0-9`): пайплайн грузится один раз, апскейл — после его выгрузки, имена
-`s{N}.png` (+ `s{N}-gen.png` чистая генерация), `run.log` и `meta.json` — в корне папки сессии.
-Эмбеддинги `gen` **не создаёт** — при промахе печатает готовую команду `run`.
+Серия кадров по seed'ам — `python -m qwenstyle gen --preset VRAM12 --prompt <project>/<prompt-stem>
+--count 9` (или `--seeds 0-9`): пайплайн грузится один раз, апскейл — после его выгрузки, имена
+`<seed>-<steps>.png` (+ `-gen.png` чистая генерация), `<seed>-<steps>.log` и `-meta.json` — рядом
+с кадром в каталоге сессии. Эмбеддинги `gen` **не создаёт** — при промахе печатает готовую команду `run`.
 
 ## 7. Открытые долги
 
