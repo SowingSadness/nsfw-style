@@ -695,6 +695,27 @@ class RunConfig:
         width, height, _ = calculate_dimensions(res ** 2, self.frame_ratio(in_w, in_h))
         return int(width), int(height)
 
+    def embedding_crop(self, crop: tuple[int, int]) -> tuple[int, int]:
+        """Сетка, на которой считается conditioning (текст + vision-токены референсов).
+
+        Обычно это сам кадр (`crop`). При заданном `ref_px` — меньше кадра, и ключ кэша
+        эмбеддингов обязан это отражать, иначе записи разных сеток смешаются (R1).
+        """
+        if True:
+            # `ref_px` (0 = сетка канваса): сетка референсов меньше кадра. Нужно на больших канвасах:
+            # энкодер видит каждое изображение референса и на сетке канваса упирается в VRAM
+            # задолго до того, как начнётся генерация.
+            ref_px = int((self.generation.sampler_kwargs or {}).get("ref_px") or 0)
+            if ref_px > 0:
+                ratio = crop[0] / max(1, crop[1])
+                ref_h = max(256, min(ref_px, int(crop[1])))
+                ref_w = max(256, min(int(round(ref_h * ratio)), int(crop[0])))
+                # 32, не 16: `image_processor` пайплайна усекает кадр до кратного 32,
+                # иначе фактические латенты референсов не совпадут с сеткой conditioning.
+                snap = 32
+                return (ref_w // snap * snap, ref_h // snap * snap)
+            return crop
+
     def upscale_factor(self, gen_h: int) -> float:
         """Множитель апскейла: из `target_height/gen_h`, иначе явный `factor`."""
         if self.upscale.target_height:

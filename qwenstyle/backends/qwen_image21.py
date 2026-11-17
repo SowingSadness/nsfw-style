@@ -512,6 +512,16 @@ class QwenImage21Backend:
                               "true = в VRAM (быстро), offload = в RAM с послойной подкачкой "
                               "(меньше VRAM, бит-в-бит), false = без кеша (префикс пересчитывается "
                               "каждый шаг)"),
+            ParameterSpec("window_attn_px", "sampler", "int", 0, minimum=0, maximum=4096,
+                          doc="контекстное окно внимания (Context Windows), px: 0 = плотное "
+                              "внимание; канвас при этом один и глобальный, режется только "
+                              "attention — без усреднения окон и без швов"),
+            ParameterSpec("window_attn_margin_px", "sampler", "int", 0, minimum=0, maximum=2048,
+                          doc="запас строк сверху и снизу к полосе внимания, px "
+                              "(больше = шире контекст, дороже по памяти)"),
+            ParameterSpec("ref_px", "sampler", "int", 0, minimum=0, maximum=2048,
+                          doc="сетка референсов, px (0 = размер канваса): на больших канвасах "
+                              "энкодер должен видеть референсы мельче, иначе OOM на [4/5]"),
             ParameterSpec("rebuild_precision_cache", "sampler", "bool", False,
                           doc="пересобрать fp8-кэш вместо чтения готового"),
             ParameterSpec("rebuild_fp8_cache", "sampler", "bool", False,
@@ -735,7 +745,7 @@ class QwenImage21Backend:
         Делается один раз на кадр: `encode` и `generate` обязаны видеть один и тот же тензор,
         иначе картинка поедет относительно run_style.py.
         """
-        crop = tuple(int(v) for v in cfg.crop(*image.size))
+        crop = tuple(int(v) for v in cfg.embedding_crop(cfg.crop(*image.size)))
         if handle.input_image is None or handle.crop != crop:
             handle.input_image = handle.pipe.image_processor.resize(
                 image, width=crop[0], height=crop[1])
@@ -756,7 +766,7 @@ class QwenImage21Backend:
         его же видит старый код через `handle.input_image`).
         """
         first = images[0]
-        crop = tuple(int(v) for v in cfg.crop(*first.size))
+        crop = tuple(int(v) for v in cfg.embedding_crop(cfg.crop(*first.size)))
         if len(images) == 1:
             return [self.resize_input(cfg, handle, first)]
         resized = [handle.pipe.image_processor.resize(image, width=crop[0], height=crop[1])
@@ -867,16 +877,23 @@ class QwenImage21Backend:
             input_images = []                     # T2I: входного кадра нет (см. caps.requires_image)
 
         first = images[0] if images else None
+        # Канвас кадра (что генерируем) и сетка conditioning (что видит трансформер) — разные
+        # вещи в оконном режиме: канвас 3200x1792, conditioning 1024x1024.
+        canvas = tuple(int(v) for v in
+                       cfg.crop(*(first.size if first is not None else (0, 0))))
         if handle.crop is not None:
             crop = handle.crop
-        elif first is not None:
-            crop = tuple(int(v) for v in cfg.crop(*first.size))
         else:
-            crop = tuple(int(v) for v in cfg.crop(0, 0))      # T2I: пропорция из --aspect
+            crop = canvas
         crop_w, crop_h = int(crop[0]), int(crop[1])
+        # Площадь референсов задаётся сеткой conditioning (`ref_px`/окно), а не канвасом:
+        # пайплайн выводит размер каждой картинки из `output_resolution` и её пропорций.
+        cond_w, cond_h = (int(v) for v in cfg.embedding_crop(canvas))
         resolution = int(handle.resolution or
                          (cfg.effective_resolution(*first.size) if first is not None
                           else cfg.effective_resolution(0, 0)))
+        if (cond_w, cond_h) != (int(canvas[0]), int(canvas[1])):
+            resolution = int(round((cond_w * cond_h) ** 0.5))
 
         prompt_embeds = cond["embeds"].to("cuda", dtype=torch.bfloat16)
         mask = cond.get("mask")
@@ -907,23 +924,42 @@ class QwenImage21Backend:
             if not install_offload():
                 print("    [kv] offload не включён — префиксный KV-кеш остаётся в VRAM",
                       flush=True)
+        sampler = cfg.generation.sampler_kwargs or {}
+        band_px = int(sampler.get("window_attn_px") or 0)
+        margin_px = int(sampler.get("window_attn_margin_px") or 0)
+        sliding: dict[str, Any] | None = None
         try:
             with torch.inference_mode():
-                result = handle.pipe(
-                    prompt=None,
-                    prompt_embeds=prompt_embeds,
-                    prompt_embeds_mask=prompt_embeds_mask,
-                    image=(input_images[0] if len(input_images) == 1
-                       else (input_images if input_images else None)),
-                    height=crop_h,
-                    width=crop_w,
-                    num_inference_steps=steps,
-                    true_cfg_scale=float(cfg.generation.guidance or 1.0),
-                    output_resolution=resolution,
-                    generator=torch.Generator("cpu").manual_seed(int(seed)),
-                    use_kv_cache=(kv_mode != "false"),
-                ).images[0]
+                # Канвас (что генерируем) и сетка conditioning (на чём считаются
+                    # референсы) — разные вещи, когда задан `ref_px`.
+                    canvas_w, canvas_h = int(canvas[0]), int(canvas[1])
+                    if band_px > 0:
+                        from . import qwen_sliding
+
+                        print(f"[attention] {qwen_sliding.describe((canvas_w, canvas_h), band_px, margin_px)}",
+                              flush=True)
+                        sliding = qwen_sliding.install(
+                            handle.pipe.transformer, grid=(canvas_w, canvas_h),
+                            band_px=band_px, margin_px=margin_px)
+                    result = handle.pipe(
+                        prompt=None,
+                        prompt_embeds=prompt_embeds,
+                        prompt_embeds_mask=prompt_embeds_mask,
+                        image=(input_images[0] if len(input_images) == 1
+                           else (input_images if input_images else None)),
+                        height=canvas_h,
+                        width=canvas_w,
+                        num_inference_steps=steps,
+                        true_cfg_scale=float(cfg.generation.guidance or 1.0),
+                        output_resolution=resolution,
+                        generator=torch.Generator("cpu").manual_seed(int(seed)),
+                        use_kv_cache=(kv_mode != "false"),
+                    ).images[0]
         finally:
+            if sliding is not None:
+                from . import qwen_sliding
+
+                qwen_sliding.uninstall(handle.pipe.transformer, sliding)
             # Патч живёт в процессе глобально: без снятия режим утёк бы в следующий seed/прогон.
             from .qwen_kv import uninstall
 

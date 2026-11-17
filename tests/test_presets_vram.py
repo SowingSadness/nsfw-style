@@ -82,8 +82,8 @@ def _family(name: str) -> str:
 def case_single_dictionary() -> None:
     """1. Каждый файл — ровно в одном профиле, и ни одного имени профиля без файла."""
     files = preset_files()
-    if len(files) != 19:
-        raise AssertionError(f"в qwenstyle/presets {len(files)} файлов, ожидалось 19: {files}")
+    if len(files) != 21:
+        raise AssertionError(f"в qwenstyle/presets {len(files)} файлов, ожидалось 21: {files}")
     registered = set(available_presets())
     unknown = [name for name in files if name not in registered]
     if unknown:

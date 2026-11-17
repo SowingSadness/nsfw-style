@@ -448,10 +448,12 @@ def _plan(cfg: RunConfig, backend_cls: type, *, verbose: bool = False) -> Plan:
         aspect = f"aspect={cfg.aspect}" if cfg.aspect else f"ratio {ratio:.3f}"
         print(f"[size] {cfg.size_px}p при {aspect} -> --resolution {resolution}", flush=True)
     crop = tuple(int(v) for v in cfg.crop(in_w, in_h))
+    # Сетка conditioning: кадр, либо уменьшенная сетка референсов (`generation.sampler_kwargs.ref_px`).
+    cond = tuple(int(v) for v in cfg.embedding_crop(crop))
     if cfg.aspect and image is not None:
         # пропорция кадра задана вручную: референс подгоняем без искажений (scale-to-cover),
         # иначе resize в бекенде сплющил бы картинку под чужую пропорцию.
-        images = [fit_cover(item, crop[0], crop[1]) for item in images]
+        images = [fit_cover(item, cond[0], cond[1]) for item in images]
         image = images[0]
     md5 = prompt_md5(prompt)
     sha = images_sha(paths)
@@ -460,10 +462,12 @@ def _plan(cfg: RunConfig, backend_cls: type, *, verbose: bool = False) -> Plan:
         source = f"{in_w}x{in_h}" if image is not None else "нет референса"
         if len(images) > 1:                 # одиночный путь печатает историческую строку 1:1
             source += f" ({len(images)} референсов)"
-        print(f"[in] {source} -> conditioning {crop[0]}x{crop[1]} | prompt {md5} | image {sha}",
+        refs = (f" (референсы {cond[0]}x{cond[1]}, канвас {crop[0]}x{crop[1]})"
+                if cond != crop else "")
+        print(f"[in] {source} -> conditioning {cond[0]}x{cond[1]}{refs} | prompt {md5} | image {sha}",
               flush=True)
 
-    blob = _cache_blob(backend_cls, cfg, crop, md5, sha)
+    blob = _cache_blob(backend_cls, cfg, cond, md5, sha)
     cache = blob_cache()
     path = cache.path(blob)
     cached: Any = None
@@ -472,7 +476,7 @@ def _plan(cfg: RunConfig, backend_cls: type, *, verbose: bool = False) -> Plan:
         # Само имя файла уже гарантирует промт/картинку/crop/тег/dtype/device, но старые
         # записи писались без части этих сегментов — их догоняет сверка сайдкара.
         meta = cache.get_meta(blob)
-        hit, reason = embeds_cache_hit(meta, embeds_expected(cfg, crop, md5, sha, backend_cls),
+        hit, reason = embeds_cache_hit(meta, embeds_expected(cfg, cond, md5, sha, backend_cls),
                                        cache.sidecar(blob))
         if hit:
             cached = cache.get(blob)
@@ -946,7 +950,9 @@ def dry_run(cfg: RunConfig) -> dict[str, Any]:
         "prompt_md5": plan.prompt_md5,
         "image_sha": plan.img_sha,
         "encoder": cfg.encoder.name,
-        "embeds_key": cfg.embeds_key(plan.crop, plan.prompt_md5, plan.img_sha),
+        # Настоящий ключ записи: с `ref_px`/окном attention он считается по сетке reференсов,
+        # а не по канвасу — печатать надо то, что реально лежит в `cache/embeds`.
+        "embeds_key": plan.cache_path.name,
         "embeds_stage": plan.blob.stage,
         "embeds_path": plan.cache_path.as_posix(),
         "embeds_cached": plan.cached is not None,
