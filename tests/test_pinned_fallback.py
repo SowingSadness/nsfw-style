@@ -176,8 +176,8 @@ def case_pin_policy() -> None:
     expected_group = (
         "VRAM8-preview", "VRAM8-release", "VRAM8-preview-anime", "VRAM8-release-anime",
         "VRAM12-preview", "VRAM12-release", "VRAM12-preview-anime", "VRAM12-release-anime",
-        "VRAM16-release", "VRAM16-release-anime", "VRAM16-4k-fast",
-        "VRAM16-r3-169", "VRAM16-r3-43",
+        "VRAM16-release", "VRAM16-release-anime", "VRAM16-large", "VRAM16-4k-fast",
+        "VRAM16-r3-169", "VRAM16-r3-43", "VRAM16-4k-slide",
     )
     group = tuple(name for name in public
                   if RunConfig.from_profile(name).generation.offload == "group")

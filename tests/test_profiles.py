@@ -1,4 +1,4 @@
-"""Публичные пресеты (15) и метка профиля (`model_label`): без GPU, весов и сети.
+"""Публичные пресеты (17) и метка профиля (`model_label`): без GPU, весов и сети.
 
 Запуск: `PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe tests/test_profiles.py`
 Успех: `PASS` по каждому кейсу, `ALL PASS` и exit 0; провал: `FAIL <кейс>: ...` и exit 1.
@@ -7,7 +7,7 @@
 `models download --profile` (`qwenstyle/profiles.py`). Ошибка в ней не падает: она просто
 обещает пользователю не тот кадр (1080p на 8 ГБ VRAM или 4K на 16 ГБ RAM). Тест фиксирует:
 
-1. **15 публичных пресетов резолвятся** и совпадают с манифестами профилей (`PROFILES`);
+1. **17 публичных пресетов резолвятся** и совпадают с манифестами профилей (`PROFILES`);
 2. **числа матрицы**: `size_px`, `steps`, `offload`, LoRA 0/0.7, `target_height`
    (VRAM8 → 1080 апскейлом, VRAM12 → 960 нативно, VRAM16 → 1440 нативно), апскейл/энкодер/кеш;
 3. публичные пресеты не тянут dev-опции (`seedvr2`, `flux2`) и не смотрят в легаси-кеш;
@@ -36,7 +36,7 @@ from qwenstyle.config import (                      # noqa: E402
 from qwenstyle.profiles import PROFILE_ORDER, PROFILES   # noqa: E402
 
 #: Публичная матрица: пресет -> (size_px, steps, lora, offload, target_height).
-#: Источник — план публикации (15 пресетов), а не вывод кода: тест ловит расхождение с ним.
+#: Источник — план публикации (17 пресетов), а не вывод кода: тест ловит расхождение с ним.
 #: `target_height` 0 = апскейла нет: у `VRAM12-release`/`VRAM16-release` это `upscale: null`
 #: (кадр отдаётся native), у черновиков — просто выключенный ESRGAN.
 MATRIX: dict[str, tuple[int, int, float, str, int]] = {
@@ -55,6 +55,8 @@ MATRIX: dict[str, tuple[int, int, float, str, int]] = {
     "VRAM16-4k-fast":        (1088, 25, 0.0, "group", 2160),
     "VRAM16-r3-169":         (912, 25, 0.0, "group", 2160),
     "VRAM16-r3-43":          (1056, 25, 0.0, "group", 2160),
+    "VRAM16-large":          (1792, 25, 0.0, "group", 0),
+    "VRAM16-4k-slide":       (2160, 25, 0.0, "group", 0),
 }
 
 #: Целевая высота кадра у профиля: именно её обещает README (1080p / 960p / 1440p).
@@ -76,7 +78,7 @@ DEV_ONLY_BACKENDS = ("seedvr2", "flux2")
 
 
 def public_presets() -> list[str]:
-    """15 публичных пресетов в порядке профилей — как их печатает `gen`/`models download`."""
+    """17 публичных пресетов в порядке профилей — как их печатает `gen`/`models download`."""
     names: list[str] = []
     for profile_name in PROFILE_ORDER:
         names.extend(PROFILES[profile_name].presets)
@@ -94,10 +96,10 @@ def _lora_scale(cfg: RunConfig) -> float:
 # --------------------------------------------------------------------------- #
 
 def case_public_presets_resolve() -> None:
-    """1. Все 15 публичных пресетов из манифестов профилей существуют и резолвятся."""
+    """1. Все 17 публичных пресетов из манифестов профилей существуют и резолвятся."""
     names = public_presets()
-    if len(names) != 15:
-        raise AssertionError(f"публичных пресетов {len(names)}, в плане 15: {names}")
+    if len(names) != 17:
+        raise AssertionError(f"публичных пресетов {len(names)}, в плане 17: {names}")
     if len(set(names)) != len(names):
         raise AssertionError(f"пресет продублирован в профилях: {names}")
     if sorted(names) != sorted(MATRIX):
@@ -110,7 +112,7 @@ def case_public_presets_resolve() -> None:
         raise AssertionError(f"нет файлов qwenstyle/presets для {missing}")
     for name in names:
         RunConfig.from_profile(name)                       # не резолвится — исключение и FAIL
-    print(f"  ok: 15 публичных пресетов резолвятся, профилей {len(PROFILE_ORDER)}")
+    print(f"  ok: 17 публичных пресетов резолвятся, профилей {len(PROFILE_ORDER)}")
 
 
 def case_matrix() -> None:
@@ -139,7 +141,7 @@ def case_matrix() -> None:
 
 def case_profiles_matrix() -> None:
     """3. Профили: 4/4/7 пресетов, целевая высота 1080/960/1440, релизы её держат."""
-    expected_counts = {"VRAM8": 4, "VRAM12": 4, "VRAM16": 7}
+    expected_counts = {"VRAM8": 4, "VRAM12": 4, "VRAM16": 9}
     for profile_name in PROFILE_ORDER:
         profile = PROFILES[profile_name]
         count = len(profile.presets)
@@ -183,7 +185,7 @@ def case_public_stays_public() -> None:
     # Кеши разделены: файлы эмбеддингов живут в cache/embeds, а не в корне cache/
     if EMBEDS_DIR.parent.name != "cache" or EMBEDS_DIR.name != "embeds":
         raise AssertionError(f"EMBEDS_DIR={EMBEDS_DIR!r} — ожидался cache/embeds")
-    print("  ok: 15 пресетов без seedvr2/flux2, fp8-кеш в cache/models, эмбеддинги в cache/embeds")
+    print("  ok: 17 пресетов без seedvr2/flux2, fp8-кеш в cache/models, эмбеддинги в cache/embeds")
 
 
 def case_labels() -> None:
@@ -253,7 +255,7 @@ def _expected_label(cfg: RunConfig, name: str) -> str:
 
 
 CASES = (
-    ("1. 15 публичных пресетов резолвятся", case_public_presets_resolve),
+    ("1. 17 публичных пресетов резолвятся", case_public_presets_resolve),
     ("2. числа публичной матрицы", case_matrix),
     ("3. профили: состав и целевая высота", case_profiles_matrix),
     ("4. публичные пресеты без dev-опций", case_public_stays_public),

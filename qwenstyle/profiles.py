@@ -173,7 +173,7 @@ VRAM16 = Profile(
     repos=(BASE_REPO, FUSAL_REPO, HERETIC_REPO, H3_REPO, H3_TE_REPO),
     presets=("VRAM16-preview", "VRAM16-preview-anime", "VRAM16-release",
              "VRAM16-release-anime", "VRAM16-large", "VRAM16-4k-fast",
-             "VRAM16-r3-169", "VRAM16-r3-43", "4K-slide"),
+             "VRAM16-r3-169", "VRAM16-r3-43", "VRAM16-4k-slide"),
     # VRAM12 + H3-Image 63.94 + 32B-энкодер 62.14 (+ fp8-кэш H3 строится на месте)
     disk_gib=round(30.86 + 1.02 + 16.33 + 63.94 + 62.14
                    + _models_caches("base fp8-трансформер", "ESRGAN x4plus_anime_6B"), 1),

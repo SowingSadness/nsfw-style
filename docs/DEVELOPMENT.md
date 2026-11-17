@@ -10,7 +10,7 @@
 
 | публичное | внутреннее (может меняться без предупреждения) |
 |---|---|
-| 15 публичных пресетов (`VRAM8-*` 4, `VRAM12-*` 4, `VRAM16-*` 7) и профили машин (`qwenstyle/profiles.py`) | остальные пресеты (`base`, `turbo`, `h3-image`, `max-h3`) |
+| 17 публичных пресетов (`VRAM8-*` 4, `VRAM12-*` 4, `VRAM16-*` 9) и профили машин (`qwenstyle/profiles.py`) | остальные пресеты (`base`, `turbo`, `h3-image`, `max-h3`) |
 | подкоманды `gen`, `run`, `selftest`, `env`, `models`, `cache`, `bench`, `config`, `compare-upscale` | внутренние функции `pipeline.run_batch`, `io.batch_paths`, `runlog`, `streaming`, `precision`, `cleanup` |
 | файлы `prompts/<имя>/prompt.txt` + `image*`, папка сессии `out/<имя>/gen-<штамп>/` | layout `cache/embeds` (`*.pt` + `.json`), `cache/models`, имена `fp8_transformer*` |
 | `RunConfig.from_profile(<имя>)`, флаги `gen`/`run`, `--set` по `ParameterSpec` | dev-бекенды (`flux2`, `seedvr2`) и их параметры |

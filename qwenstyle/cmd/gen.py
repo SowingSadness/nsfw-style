@@ -99,7 +99,8 @@ def public_presets() -> tuple[str, ...]:
 
 def preset_aliases() -> dict[str, str]:
     """Шорткаты: `<family>` -> `<family>-release`, `<family>-anime` -> `-release-anime`."""
-    aliases: dict[str, str] = {"VRAM16-4k-fast": "VRAM16-4k-fast"}
+    aliases: dict[str, str] = {"VRAM16-4k-fast": "VRAM16-4k-fast",
+                               "4K-slide": "VRAM16-4k-slide"}
     for family in PROFILE_ORDER:
         aliases[family] = f"{family}-release"
         for suffix in ("preview", "release", "preview-anime", "release-anime"):
@@ -582,7 +583,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     source = parser.add_argument_group("что и чем генерировать")
     source.add_argument("--preset", default=None, metavar="PRESET",
                         help="VRAM8|VRAM12|VRAM16 (== <family>-release), <family>-preview|"
-                             "-release|-preview-anime|-release-anime|-anime, VRAM16-4k-fast "
+                             "-release|-preview-anime|-release-anime|-anime, VRAM16-4k-fast, 4K-slide "
                              "или точное имя любого пресета из qwenstyle/presets/; регистр не важен")
     source.add_argument("--prompt", default=None, metavar="NAME",
                         help="промт проекта: <project>/<prompt-stem> (или <project> при "

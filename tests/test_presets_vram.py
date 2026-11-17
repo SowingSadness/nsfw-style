@@ -47,7 +47,7 @@ from qwenstyle.profiles import PROFILE_ORDER, PROFILES                  # noqa: 
 FAMILIES = ("VRAM8", "VRAM12", "VRAM16")
 #: Варианты внутри семейства (`-release`, `-preview-anime`, `-4k-fast`, `-r3-169`, …).
 SUFFIXES = ("preview", "release", "preview-anime", "release-anime", "anime",
-            "4k-fast", "r3-169", "r3-43")
+            "large", "4k-fast", "4k-slide", "r3-169", "r3-43")
 #: Пресеты-не-тарифы: конкретная модель/база, а не «сколько VRAM». В профили не входят.
 NON_TARIFF = ("base", "turbo", "h3-image", "max-h3")
 #: KV-кеш: у тарифов 12/16 префикс живёт в RAM, у 8 — по числу референсов (дефолт конфига).
