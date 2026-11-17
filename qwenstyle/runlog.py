@@ -273,14 +273,8 @@ class RunLog:
         return self.path
 
 
-def write_meta(frame: str | Path, cfg: Any, extra: dict[str, Any] | None = None) -> Path | None:
-    """`<кадр>-meta.json` рядом с кадром: чем и когда сделан кадр (без чтения консоли).
-
-    Пишется **всегда**, независимо от `logs`/`--no-logs` (это обещает help): только сам `.log`
-    выключается флагом. Ошибка записи не важна: метаданные — удобство, кадр и лог от них
-    не зависят. Запись атомарная (`*.tmp` + `os.replace`).
-    """
-    target = meta_path(frame)
+def _write_json(target: Path, cfg: Any, extra: dict[str, Any] | None) -> Path | None:
+    """Общая часть `write_meta`/`write_dir_meta`: атомарная запись JSON, ошибка не роняет прогон."""
     data: dict[str, Any] = {
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "argv": list(sys.argv),
@@ -307,4 +301,26 @@ def write_meta(frame: str | Path, cfg: Any, extra: dict[str, Any] | None = None)
     return target
 
 
-__all__ = ["LOG_SUFFIX", "META_SUFFIX", "RunLog", "log_path", "meta_path", "write_meta"]
+def write_meta(frame: str | Path, cfg: Any, extra: dict[str, Any] | None = None) -> Path | None:
+    """`<кадр>-meta.json` рядом с кадром: чем и когда сделан кадр (без чтения консоли).
+
+    Для одиночного прогона (`run`). Пачка (`gen`) пишет **один** `<каталог>/meta.json`
+    (`write_dir_meta`), а на каждый кадр оставляет только его `.log`.
+    Пишется **всегда**, независимо от `logs`/`--no-logs`: только сам `.log` выключается флагом.
+    Ошибка записи не важна: метаданные — удобство, кадр и лог от них не зависят.
+    """
+    return _write_json(meta_path(frame), cfg, extra)
+
+
+def write_dir_meta(directory: str | Path, cfg: Any,
+                   extra: dict[str, Any] | None = None) -> Path | None:
+    """`<каталог>/meta.json` — **одна** запись на всю пачку кадров (`gen --count N`).
+
+    Описывает сессию целиком: параметры прогона, список кадров с их таймингами и итоги. Так
+    20 seed'ов дают один `meta.json`, а не 20 копий общей части.
+    """
+    return _write_json(Path(directory) / "meta.json", cfg, extra)
+
+
+__all__ = ["LOG_SUFFIX", "META_SUFFIX", "RunLog", "log_path", "meta_path",
+           "write_dir_meta", "write_meta"]

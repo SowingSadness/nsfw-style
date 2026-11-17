@@ -90,7 +90,7 @@ MiniMax-H3-Image: T2I + edit на модульном пайплайне diffuser
 (в т.ч. `h3-image.yaml`);
 `prompts/<project>/` — проект промта `gen`: `refs/` (все `*.png|jpg|jpeg|webp`, порядок = natural
 sort), `prompt-<model>.txt`, опциональный `project.yaml` и `out/<YYYYMMDDHHMM>-<tag>/` (кадры
-`<seed>-<steps>.png|.log|-meta.json`); эталоны промтов — `tests/texts/exp*.txt` (см. §5);
+`<seed>-<steps>.png|.log` + один `meta.json` на сессию); эталоны промтов — `tests/texts/exp*.txt` (см. §5);
 `cache/embeds/` — кэш эмбеддингов, `cache/models/` — квантование и веса энкодеров;
 `hf-cache/` — веса; `out/` — результаты (`out/tests/` — только артефакты тестов); `tests/` — обычные скрипты-проверки (pytest в venv нет и
 ставить нельзя; успех = `ALL PASS` + exit 0, без CUDA скрипт печатает `SKIP`);
@@ -144,13 +144,13 @@ python -m qwenstyle gen --preset VRAM12 --prompt <project>/<prompt-stem> [--seed
                                 # главная точка входа: проект prompts/<project>/ (refs/ + prompt-<model>.txt)
                                 # --project <yaml> — preset + любые поля RunConfig (флаги CLI главнее)
                                 # --out DIR — каталог сессий (по умолчанию <project>/out)
-                                # -> <out>/<YYYYMMDDHHMM>-<tag>/<seed>-<steps>.png|.log|-meta.json
+                                # -> <out>/<YYYYMMDDHHMM>-<tag>/<seed>-<steps>.png|.log + meta.json
                                 # --dry-run — план без весов; --no-logs — без .log (meta остаётся)
 python -m qwenstyle run [--preview | --size 768p | --resolution N] [--aspect 16:9|4:3|1:1|2:3] [--prompt-file ...] [--input ...] --out ...
                                 # одиночный кадр: все флаги старого run_style.py + --config/--set
                                 # --input необязателен: нужен ли референс, решает `Capabilities.requires_image`
                                 # --dry-run (план без весов)
-                                # --out каталог -> <cat>/<seed>-<steps>.png (+ .log, -meta.json рядом),
+                                # --out каталог -> <cat>/<seed>-<steps>.png (+ .log у кадра, meta.json на сессию),
                                 # --out файл *.png -> к имени добавятся -<seed>-<steps> [-x{factor}]
                                 # --no-logs — без .log (meta остаётся)
 python -m qwenstyle selftest --profile VRAM8|VRAM12|VRAM16   # установка: окружение, веса профиля, рендер 480p/4 шага
@@ -227,7 +227,9 @@ hf cache verify <repo>                                  # целостность
 
 Логи прогона: и `run`, и `gen` кладут лог и meta **рядом с кадром и по его имени** —
 `<кадр>.log` и `<кадр>-meta.json` (`qwenstyle/runlog.py`). В `gen` у каждого seed'а свой `.log`
-(общий заголовок `[plan]`/prepare копируется в каждый), общих `run.log`/`meta.json` больше нет.
+(общий заголовок `[plan]`/prepare копируется в каждый), а `meta.json` — **один на сессию**
+(`write_dir_meta`): кадры пишутся на диск сразу после генерации и в RAM не держатся, апскейл
+читает их с диска.
 `--no-logs` (или `logs: false` в пресете) выключает только `.log`; meta пишется всегда.
 Лог — наблюдение: ключ кэша эмбеддингов и кадр от него не зависят, ошибка записи не роняет прогон;
 `bench`/`selftest`/тесты ходят в `pipeline.run(..., log=None)` и папок не оставляют. Тесты
@@ -949,7 +951,7 @@ done
 
 Серия кадров по seed'ам — `python -m qwenstyle gen --preset VRAM12 --prompt <project>/<prompt-stem>
 --count 9` (или `--seeds 0-9`): пайплайн грузится один раз, апскейл — после его выгрузки, имена
-`<seed>-<steps>.png` (+ `-gen.png` чистая генерация), `<seed>-<steps>.log` и `-meta.json` — рядом
+`<seed>-<steps>.png` (+ `-gen.png` чистая генерация), `<seed>-<steps>.log` у кадра, `meta.json` — один на сессию
 с кадром в каталоге сессии. Эмбеддинги `gen` **не создаёт** — при промахе печатает готовую команду `run`.
 
 ## 7. Открытые долги

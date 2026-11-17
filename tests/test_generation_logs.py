@@ -10,8 +10,8 @@
 чем он сделан. Теперь лог и meta лежат **рядом с кадром и называются его именем**:
 
 * `run` — `out/tests/x-7-1.png`, `out/tests/x-7-1.log`, `out/tests/x-7-1-meta.json`;
-* `gen` — в каталоге сессии на каждый кадр: `<seed>-<steps>.png|.log|-meta.json`
-  (общего `run.log`/`meta.json` больше нет).
+* `gen` — в каталоге сессии на каждый кадр `<seed>-<steps>.png` и `<seed>-<steps>.log`, а
+  `meta.json` **один на всю сессию** (20 сидов = 20 логов + 1 meta, а не 20 копий общей части).
 
 Тест фиксирует то, что легко сломать незаметно:
 
@@ -20,7 +20,7 @@
 2. **метки времени**: каждая содержательная строка лога начинается с `[HH:MM:SS] ` (прогресс-бары
    tqdm — исключение: они перерисовывают одну строку через `\\r`);
 3. **`--no-logs`** убирает `.log`, но `<кадр>-meta.json` остаётся (так обещает help);
-4. **`gen`**: у каждого кадра свой `.log`/`-meta.json`; в логе есть общий заголовок (`[in]`,
+4. **`gen`**: у каждого кадра свой `.log`, `meta.json` один на сессию; в логе есть общий заголовок (`[in]`,
    `[size]`) и `[gen] итог`; сессия — `<out>/<штамп>-<tag>/`;
 5. **результаты тестов лежат только в `out/tests/`**: корень `out/` принадлежит пользователю.
 
@@ -176,7 +176,7 @@ def case_no_logs() -> None:
 
 
 def case_gen_session_log() -> None:
-    """3. `gen`: у каждого кадра свой `.log`/`-meta.json` в каталоге сессии."""
+    """3. `gen`: у каждого кадра свой `.log`, `meta.json` — один на всю сессию."""
     from qwenstyle.cmd import _project as project    # импорт не тянет torch
     from qwenstyle.cmd import gen as gen_cmd
 
@@ -211,10 +211,14 @@ def case_gen_session_log() -> None:
 
         frame = session / f"{SEED}-{STEPS}.png"
         log = session / f"{SEED}-{STEPS}.log"
-        meta = session / f"{SEED}-{STEPS}-meta.json"
+        meta = session / "meta.json"
         if not frame.is_file() or not log.is_file() or not meta.is_file():
             raise AssertionError(f"нет кадра/лога/meta: "
                                  f"{sorted(path.name for path in session.iterdir())}")
+        per_frame_meta = list(session.glob("*-meta.json"))
+        if per_frame_meta:
+            raise AssertionError(f"meta.json обязан быть один на сессию, а найдено "
+                                 f"{[path.name for path in per_frame_meta]}")
         if (session / f"{SEED}-{STEPS}").is_dir():
             raise AssertionError("gen создал подпапку на кадр — лог обязан быть рядом")
 
@@ -225,15 +229,18 @@ def case_gen_session_log() -> None:
         _assert_stamped(text, "session/<frame>.log")
 
         payload = json.loads(meta.read_text(encoding="utf-8"))
-        if payload.get("seed") != SEED or payload.get("steps") != STEPS:
-            raise AssertionError(f"meta кадра: seed/steps={payload.get('seed')!r}/"
-                                 f"{payload.get('steps')!r}")
-        section = payload.get("session") or {}
-        if [int(seed) for seed in section.get("seeds") or []] != [SEED]:
-            raise AssertionError(f"meta session.seeds={section.get('seeds')!r}, "
-                                 f"ожидалось [{SEED}]")
-        if Path(section.get("prompt_file") or "").name != "prompt-qwen.txt":
-            raise AssertionError(f"meta session.prompt_file={section.get('prompt_file')!r}")
+        if [int(seed) for seed in payload.get("seeds") or []] != [SEED]:
+            raise AssertionError(f"meta.seeds={payload.get('seeds')!r}, ожидалось [{SEED}]")
+        if Path(payload.get("prompt_file") or "").name != "prompt-qwen.txt":
+            raise AssertionError(f"meta.prompt_file={payload.get('prompt_file')!r}")
+        frames = payload.get("frames") or []
+        if len(frames) != 1 or int(frames[0].get("seed", -1)) != SEED:
+            raise AssertionError(f"meta.frames={frames!r}, ожидался один кадр seed={SEED}")
+        if Path(frames[0].get("file") or "").name != frame.name:
+            raise AssertionError(f"meta.frames[0].file={frames[0].get('file')!r}, "
+                                 f"ожидалось {frame.name}")
+        if int((payload.get("totals") or {}).get("frames", 0)) != 1:
+            raise AssertionError(f"meta.totals={payload.get('totals')!r}")
         print(f"  ok: gen -> {session.name}/{{{frame.name},{log.name},{meta.name}}}")
 
 
@@ -260,7 +267,7 @@ def main() -> int:
         cases = (
             ("1. run: .log и -meta.json рядом с кадром", case_run_logs),
             ("2. --no-logs отключает .log, meta остаётся", case_no_logs),
-            ("3. gen: .log/-meta.json у каждого кадра", case_gen_session_log),
+            ("3. gen: .log у кадра, meta.json один на сессию", case_gen_session_log),
             ("4. результаты тестов только в out/tests", case_out_root_untouched),
         )
     else:

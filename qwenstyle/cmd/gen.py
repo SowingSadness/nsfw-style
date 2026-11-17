@@ -15,7 +15,6 @@
                 84-25.png          # кадр (seed 84, 25 шагов)
                 84-25-gen.png      # чистая генерация — только если апскейл реально работает
                 84-25.log          # весь вывод этого кадра (`qwenstyle/runlog.py`)
-                84-25-meta.json    # параметры и тайминги кадра
 
     python -m qwenstyle gen --preset VRAM12 --prompt my-project/prompt-qwen --seeds 84
     python -m qwenstyle gen --project prompts/my-project/project.yaml --count 3
@@ -28,7 +27,7 @@
 
 Сессия — `<out>/<YYYYMMDDHHMM>-<tag>/`; `--out` задаёт каталог сессий (по умолчанию
 `prompts/<project>/out`). Файлы кадра — `<seed>-<steps>.png`, `<seed>-<steps>-gen.png`,
-`<seed>-<steps>.log`, `<seed>-<steps>-meta.json`.
+`<seed>-<steps>.log`; `meta.json` — один на всю сессию.
 
 `--preset` принимает шорткаты (`VRAM8`/`VRAM12`/`VRAM16` = `<family>-release`,
 `<family>-preview`, `-release`, `-preview-anime`, `-release-anime`, `-anime` = `-release-anime`,
@@ -64,7 +63,7 @@ from ..config import (
 )
 from ..io import batch_paths
 from ..profiles import PROFILE_ORDER, PROFILES
-from ..runlog import write_meta
+from ..runlog import write_dir_meta
 from . import parse_sets
 from . import _project as project
 from ._args import UPSCALE_HELP, parse_upscale
@@ -394,7 +393,7 @@ def print_plan(cfg: RunConfig, info: dict[str, Any], session: Path, seeds: list[
           f"target_height={target if target else '-'} -> out {info.get('out_size')}"
           + (" (пропущен)" if info.get("upscale_skipped") else ""), flush=True)
     frame = f"{posix(session)}/<seed>-{int(steps)}.png"
-    files = f"{frame} + <seed>-{int(steps)}.log + <seed>-{int(steps)}-meta.json"
+    files = f"{frame} + <seed>-{int(steps)}.log (+ один meta.json на сессию)"
     if factor > 0:
         files += f" + <seed>-{int(steps)}-gen.png (апскейл включён)"
     print(f"[plan] файлы сессии: {files}", flush=True)
@@ -436,11 +435,11 @@ def write_session_meta(cfg: RunConfig, *, prompt: project.ProjectPrompt,
                        project_path: Path | None, refs_dir: Path, images: list[Path],
                        seeds: list[int], results: list[Any] | None = None,
                        elapsed: float = 0.0) -> None:
-    """`<кадр>-meta.json` для каждого кадра сессии (общая часть + тайминги своего seed'а).
+    """**Один** `<сессия>/meta.json` на всю пачку кадров (а не по файлу на кадр).
 
-    Кадр, его `.log` и meta лежат рядом; общих `meta.json` в корне сессии больше нет.
-    `pipeline.run_batch` уже записал в meta параметры и seed до генерации — здесь запись
-    дополняется сессией (проект, промт, референсы, версии) и таймингами.
+    Внутри: параметры прогона, проект/промт/референсы, версии, список кадров с их таймингами и
+    итоги по сессии. На каждый кадр остаётся только его `<seed>-<steps>.log` — он нужен для
+    отладки конкретной генерации, а общая часть в 20 копиях не нужна.
     """
     session_info: dict[str, Any] = {
         "project": posix(project_path) if project_path else None,
@@ -473,17 +472,9 @@ def write_session_meta(cfg: RunConfig, *, prompt: project.ProjectPrompt,
         "total_s": round(float(elapsed), 1),
         "per_frame_s": round(float(elapsed) / count, 1) if count else None,
     }
-    for result in results or []:
-        if result.out_path is None:
-            continue
-        write_meta(result.out_path, cfg, extra={
-            "seed": int(result.seed),
-            "steps": int(cfg.steps),
-            "gen_size": "%dx%d" % result.gen_size,
-            "out_size": "%dx%d" % result.out_size,
-            "timings": {key: round(float(value), 2) for key, value in result.timings.items()},
-            "session": session_info,
-        })
+    if results:
+        # Каталог сессии = каталог первого кадра: meta.json лежит рядом с кадрами и их логами.
+        write_dir_meta(Path(results[0].out_path).parent, cfg, extra=session_info)
 
 
 # --------------------------------------------------------------------------- #
@@ -615,7 +606,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     run_group.add_argument("--dry-run", action="store_true",
                            help="только план (сетка, ключ кэша, сессия) без загрузки весов")
     run_group.add_argument("--no-logs", dest="no_logs", action="store_true",
-                           help="не писать <кадр>.log (кадры и <кадр>-meta.json остаются)")
+                           help="не писать <кадр>.log (кадры и meta.json сессии остаются)")
 
 
 __all__ = ["HELP", "NAME", "PATH_SUFFIXES", "add_args", "build_config", "casefold_index",

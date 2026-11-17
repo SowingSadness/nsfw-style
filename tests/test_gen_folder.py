@@ -14,7 +14,7 @@
 2. `--prompt`: `<project>/<stem>`, `<project>/<stem>.txt`, `<project>` при единственном `*.txt`;
    ошибки с перечнем кандидатов; выход из `prompts/` отбит;
 3. tag сессии: `prompt-qwen` -> `qwen`, `canyon-iren` -> `canyon-iren`;
-4. имена кадров `<seed>-<steps>[-gen].png`, лог/meta рядом с кадром;
+4. имена кадров `<seed>-<steps>[-gen].png`, лог у кадра, `meta.json` — один на сессию;
 5. `Capabilities.max_images` соблюдается (12 -> 10), `<imageN>` = порядок refs;
 6. нет `refs/` при `requires_image=True` -> exit 2 с текстом про refs; T2I-пресет — законный
    `noref`;
@@ -186,7 +186,7 @@ def case_tags() -> None:
 
 
 def case_frame_names() -> None:
-    """4. Имена: `<seed>-<steps>[-gen].png`; лог/meta — рядом с кадром."""
+    """4. Имена: `<seed>-<steps>[-gen].png`; лог — у кадра, `meta.json` — один на сессию."""
     gen_path, up_path = qio.batch_paths("d", 84, 25)
     if (gen_path, up_path) != ("d/84-25-gen.png", "d/84-25.png"):
         raise AssertionError(f"batch_paths -> {(gen_path, up_path)}")

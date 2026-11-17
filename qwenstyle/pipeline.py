@@ -803,7 +803,9 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
     Файлы: `<out-dir>/<seed>-<steps>-gen.png` (чистая генерация, только если апскейл включён и
     `keep_gen`) и `<out-dir>/<seed>-<steps>.png` (после апскейла; при выключенном апскейле — сама
     генерация, без дубля `-gen`). `resume` пропускает seed'ы, у которых `<seed>-<steps>.png` уже
-    есть. Лог и meta — у каждого кадра свои: `<seed>-<steps>.log` / `<seed>-<steps>-meta.json`.
+    есть. Лог у каждого кадра свой (`<seed>-<steps>.log`), `meta.json` пишет вызывающий —
+    **один на сессию**. Кадр сбрасывается на диск сразу после генерации и в памяти не держится:
+    апскейл читает его с диска (`keep_gen` решает, остаётся ли `<seed>-<steps>-gen.png`).
     """
     batch: BatchConfig | None = cfg.batch
     if batch is None:
@@ -841,14 +843,15 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
 
     cond = _conditioning(cfg, backend, handle, plan, timings, cleanup)
 
-    frames: list[tuple[int, Any, float]] = []
+    # Кадр пишется на диск сразу после генерации и дальше живёт файлом: пачка из 20 seed'ов не
+    # держит в RAM 20 × 4K-RGB (это гигабайты), а апскейл читает кадр с диска.
+    frames: list[dict[str, Any]] = []
     for index, seed in enumerate(seeds, start=1):
         gen_path, up_path = batch_paths(batch.out_dir, seed, cfg.steps)
         if seed not in todo:
             continue
         if log is not None:
             log.attach(up_path)                   # свой `.log` у каждого кадра (заголовок копируется)
-            write_meta(up_path, cfg, extra={"seed": int(seed), "steps": int(cfg.steps)})
         print(f"[batch {index}/{len(seeds)}] seed={seed}", flush=True)
         started = time.time()
         image = backend.generate(cfg, handle, cond, plan.images, seed)
@@ -856,44 +859,47 @@ def run_batch(cfg: RunConfig, log: "RunLog | None" = None) -> list[Result]:
         used = vram_used_gib()
         print(f"[gen] seed {seed}: {elapsed:.1f}s {image.size[0]}x{image.size[1]}"
               + (f" peak {used:.1f} GiB" if used is not None else ""), flush=True)
-        if batch.keep_gen and plan.factor > 0:
-            # только если апскейл реально изменит кадр: иначе <seed>-<steps>.png и есть генерация,
-            # и -gen был бы байт-в-байт дублем.
-            save_atomic(image, gen_path)          # сразу на диск: прерванный батч не теряет кадры
-        frames.append((seed, image, elapsed))
+        gen_size = (int(image.size[0]), int(image.size[1]))
+        save_atomic(image, gen_path)              # сброс на диск: прерванный батч не теряет кадры
+        del image
+        frames.append({"seed": int(seed), "gen_path": Path(gen_path),
+                       "up_path": Path(up_path), "gen_size": gen_size, "elapsed": elapsed})
 
     _release(backend, handle)                      # до апскейла: освобождаем всю VRAM
 
-    factor = float(cfg.upscale_factor(frames[0][1].size[1]))
+    from PIL import Image
+
+    factor = float(cfg.upscale_factor(frames[0]["gen_size"][1]))
     results: list[Result] = []
     up_seconds: list[float] = []
-    for seed, image, gen_elapsed in frames:
-        gen_size = (int(image.size[0]), int(image.size[1]))
-        final = image
+    for frame in frames:
+        seed, gen_elapsed = frame["seed"], frame["elapsed"]
+        gen_path, up_path, gen_size = frame["gen_path"], frame["up_path"], frame["gen_size"]
         elapsed = 0.0
-        _gen_path, up_path = batch_paths(batch.out_dir, seed, cfg.steps)
         if log is not None:
             log.attach(up_path)                   # апскейл пишется в лог своего кадра
         if factor > 0:
-            final, elapsed = _postprocess(cfg, image, factor, seed)
-            up_seconds.append(elapsed)
-        target = save_atomic(final, up_path)
-        if log is not None:
-            write_meta(target, cfg, extra={
-                "seed": int(seed),
-                "steps": int(cfg.steps),
-                "gen_size": f"{gen_size[0]}x{gen_size[1]}",
-                "out_size": f"{final.size[0]}x{final.size[1]}",
-                "timings": {"generate": round(float(gen_elapsed), 2),
-                            "upscale": round(float(elapsed), 2)},
-            })
-        results.append(Result(image=final, gen_size=gen_size,
-                              out_size=(int(final.size[0]), int(final.size[1])),
+            with Image.open(gen_path) as opened:   # с диска: в RAM держим один кадр, не все
+                source = opened.convert("RGB")
+            final, elapsed = _postprocess(cfg, source, factor, seed)
+            del source
+            target = save_atomic(final, up_path)
+            out_size = (int(final.size[0]), int(final.size[1]))
+            del final
+            if not batch.keep_gen:
+                # `-gen.png` остаётся только при `keep_gen`: иначе это был служебный файл
+                Path(gen_path).unlink(missing_ok=True)
+        else:
+            # апскейла нет — сохранённый кадр и есть генерация: переносим файл, без перекодирования
+            Path(gen_path).replace(up_path)
+            target = Path(up_path)
+            out_size = gen_size
+        results.append(Result(image=None, gen_size=gen_size, out_size=out_size,
                               seed=int(seed),
                               timings={"generate": gen_elapsed, "upscale": elapsed},
                               out_path=target))
 
-    timings["generate"] = sum(item[2] for item in frames)
+    timings["generate"] = sum(float(item["elapsed"]) for item in frames)
     timings["upscale"] = sum(up_seconds)
     timings["total"] = time.time() - t0
     print(f"[done] {len(results)} кадров в {out_dir} за {timings['total']:.0f}s "
