@@ -153,9 +153,25 @@ def _resolve_kv_cache(mode: str, refs: int) -> str:
     (15.2 ГиБ, 14 с), два — OOM на шаге 0 (префикс 4.6 ГиБ). Поэтому умолчание `auto-offload-ref2`:
     ровно в том случае, где `true` ломается, кеш уезжает в RAM (`offload`, цена ~+13 % времени).
     """
-    if mode == "auto-offload-ref2":
-        return "offload" if int(refs) > 1 else "true"
-    return mode
+    from ..cubes import strategy_kv
+
+    return strategy_kv.KvParams(mode=mode).resolve(refs)
+
+
+def _precision_params(cfg: Any) -> Any:
+    """Параметры стратегии точности (`strategy.precision.fp8`) из конфига прогона.
+
+    Стратегия объявляет `precision`/`cache_dir`/`rebuild`; бэкенд только читает её значения,
+    поэтому семантика fp8 живёт в кубике, а не в `generation.*`.
+    """
+    from ..cubes import strategy_precision
+
+    kwargs = getattr(cfg.generation, "sampler_kwargs", None) or {}
+    return strategy_precision.PrecisionParams.from_mapping({
+        "precision": cfg.generation.precision,
+        "cache_dir": cfg.generation.precision_cache,
+        "rebuild": kwargs.get("rebuild_precision_cache") or kwargs.get("rebuild_fp8_cache") or False,
+    })
 
 
 def _rebuild_requested(cfg: Any) -> bool:
@@ -945,9 +961,14 @@ class QwenImage21Backend:
             if not install_offload():
                 print("    [kv] offload не включён — префиксный KV-кеш остаётся в VRAM",
                       flush=True)
+        from ..cubes import strategy_window_attention
+
         sampler = cfg.generation.sampler_kwargs or {}
-        band_px = int(sampler.get("window_attn_px") or 0)
-        margin_px = int(sampler.get("window_attn_margin_px") or 0)
+        window = strategy_window_attention.WindowParams.from_mapping({
+            "window_attn_px": sampler.get("window_attn_px"),
+            "window_attn_margin_px": sampler.get("window_attn_margin_px"),
+        })
+        band_px, margin_px = window.band_px, window.margin_px
         sliding: dict[str, Any] | None = None
         try:
             with torch.inference_mode():
