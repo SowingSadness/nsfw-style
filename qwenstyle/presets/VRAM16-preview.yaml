@@ -24,7 +24,4 @@ generation:
 
 size_px: 768              # 768p: 1376x768 при 16:9
 
-upscale:
-  backend: esrgan
-  factor: 0
-  target_height: 0        # черновик без апскейла
+upscale: null
