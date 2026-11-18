@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "module": "esnext",
+    "target": "es2022",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom"],
+    "strict": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.mjs", "test/**/*.mjs", "tools/**/*.mjs", "web/**/*.mjs"]
+}

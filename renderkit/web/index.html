@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="renderkit: калькулятор настроек рендера по целевому кадру — оценки памяти и времени, YAML-конфиг без имён пресетов.">
+  <title>renderkit — настройки рендера под целевой кадр</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="top-line">
+      <h1>renderkit</h1>
+      <p class="top-meta" id="ruleset-line"></p>
+    </div>
+    <p class="lede">
+      Целевой кадр → настройки рендера, YAML-конфиг и оценки памяти. Считает изоморфное ядро
+      <code>src/index.mjs</code> прямо в браузере: сеть, веса и CUDA не нужны. У каждого параметра
+      есть <span class="inline-hint">?</span> — три аспекта (качество, производительность, система)
+      и живая цифра для текущего запроса.
+    </p>
+  </header>
+
+  <main>
+    <form class="card" id="form" novalidate aria-labelledby="form-title">
+      <h2 id="form-title">Запрос</h2>
+
+      <section class="form-section" aria-labelledby="frame-title">
+        <h3 id="frame-title">Кадр</h3>
+        <div class="row">
+          <div class="field" data-help="width">
+            <label for="w">Ширина, px</label>
+            <input id="w" name="w" type="number" inputmode="numeric" min="256" max="8192" step="32"
+                   value="2560" aria-describedby="hint-width">
+          </div>
+          <div class="field" data-help="height">
+            <label for="h">Высота, px</label>
+            <input id="h" name="h" type="number" inputmode="numeric" min="256" max="8192" step="32"
+                   value="1440" aria-describedby="hint-height">
+          </div>
+        </div>
+        <div class="chips" role="group" aria-label="Готовые размеры кадра">
+          <button type="button" class="chip" data-size="1280x720">1280×720</button>
+          <button type="button" class="chip" data-size="1920x1080">1920×1080</button>
+          <button type="button" class="chip" data-size="2560x1440">2560×1440</button>
+          <button type="button" class="chip" data-size="3200x1792">3200×1792</button>
+        </div>
+
+        <fieldset class="field" data-help="quality">
+          <legend>Качество</legend>
+          <label class="radio"><input type="radio" name="quality" value="draft" id="q-draft" aria-describedby="hint-quality"> draft — черновик</label>
+          <label class="radio"><input type="radio" name="quality" value="standard" id="q-standard" aria-describedby="hint-quality"> standard — рабочий кадр</label>
+          <label class="radio"><input type="radio" name="quality" value="max" id="q-max" aria-describedby="hint-quality" checked> max — всё, что даёт модель</label>
+        </fieldset>
+
+        <fieldset class="field" data-help="bitDepth">
+          <legend>Глубина цвета</legend>
+          <label class="radio"><input type="radio" name="bits" value="8" id="bits-8" aria-describedby="hint-bitDepth" checked> 8 бит — PNG (поддержано)</label>
+          <label class="radio"><input type="radio" name="bits" value="16" id="bits-16" aria-describedby="hint-bitDepth"> 16 бит — пока не поддержано</label>
+        </fieldset>
+      </section>
+
+      <section class="form-section" aria-labelledby="hw-title">
+        <h3 id="hw-title">Железо</h3>
+        <div class="field" data-help="model">
+          <label for="model">Модель</label>
+          <select id="model" name="model" aria-describedby="hint-model">
+            <option value="qwen21-base" selected>Qwen-Image-2.1 base (25 шагов)</option>
+            <option value="qwen21-turbo">Qwen-Image-2.1-Turbo (8 шагов)</option>
+            <option value="h3-image">MiniMax-H3-Image (6 шагов PDD)</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <div class="field" data-help="vramGib">
+            <label for="vram">VRAM, ГиБ</label>
+            <input id="vram" name="vram" type="number" inputmode="numeric" min="4" max="96" step="1"
+                   value="16" aria-describedby="hint-vramGib">
+            <input id="vram-range" name="vram-range" type="range" min="4" max="96" step="1" value="16"
+                   aria-describedby="hint-vramGib" aria-label="VRAM, ГиБ (ползунок)">
+          </div>
+          <div class="field" data-help="ramGib">
+            <label for="ram">RAM, ГиБ</label>
+            <input id="ram" name="ram" type="number" inputmode="numeric" min="8" max="512" step="4"
+                   value="64" aria-describedby="hint-ramGib">
+            <input id="ram-range" name="ram-range" type="range" min="8" max="512" step="4" value="64"
+                   aria-describedby="hint-ramGib" aria-label="RAM, ГиБ (ползунок)">
+          </div>
+        </div>
+
+        <div class="chips" role="group" aria-label="Готовые профили железа">
+          <button type="button" class="chip" data-hw="8x16">8 / 16 ГиБ</button>
+          <button type="button" class="chip" data-hw="12x32">12 / 32 ГиБ</button>
+          <button type="button" class="chip" data-hw="16x64">16 / 64 ГиБ</button>
+        </div>
+
+        <fieldset class="field" data-help="disk">
+          <legend>Накопитель</legend>
+          <label class="radio"><input type="radio" name="disk" value="hdd" id="disk-hdd" aria-describedby="hint-disk"> HDD / SMB</label>
+          <label class="radio"><input type="radio" name="disk" value="ssd" id="disk-ssd" aria-describedby="hint-disk"> SATA SSD</label>
+          <label class="radio"><input type="radio" name="disk" value="nvme" id="disk-nvme" aria-describedby="hint-disk" checked> NVMe</label>
+        </fieldset>
+      </section>
+
+      <details class="form-section advanced">
+        <summary>Расширенно</summary>
+        <div class="row">
+          <div class="field" data-help="refs">
+            <label for="refs">Референсов</label>
+            <input id="refs" name="refs" type="number" inputmode="numeric" min="0" max="10" step="1"
+                   value="1" aria-describedby="hint-refs">
+          </div>
+          <div class="field" data-help="freeDiskGib">
+            <label for="free-disk">Свободно на диске, ГиБ</label>
+            <input id="free-disk" name="free-disk" type="number" inputmode="numeric" min="0" max="4096" step="1"
+                   placeholder="не проверять" aria-describedby="hint-freeDiskGib">
+          </div>
+        </div>
+        <div class="field" data-help="anime">
+          <label class="radio"><input type="checkbox" id="anime" name="anime" aria-describedby="hint-anime"> стилевой адаптер (anime, сила 0.7)</label>
+        </div>
+      </details>
+
+      <p class="form-error" id="form-error" role="alert" hidden></p>
+    </form>
+
+    <section class="card" id="result" aria-labelledby="result-title" aria-live="polite">
+      <h2 id="result-title" class="sr-only">Результат расчёта</h2>
+      <div class="verdict">
+        <span class="badge" id="badge">—</span>
+        <p class="headline" id="headline">—</p>
+      </div>
+      <p class="confidence" id="confidence"></p>
+      <div id="resolve" class="panel"></div>
+    </section>
+
+    <section class="card" id="memory-panel-card" aria-labelledby="memory-title">
+      <div class="panel-head">
+        <h2 id="memory-title">Раскладка памяти</h2>
+        <button type="button" class="chip" id="kv-toggle">KV: авто</button>
+      </div>
+      <p class="panel-note" id="memory-note">Что где лежит, чем это стоит и почему выбрано именно так.</p>
+      <div id="memory-panel" class="panel"></div>
+    </section>
+
+    <section class="card" id="combinations-card" aria-labelledby="combos-title">
+      <h2 id="combos-title">Сочетания</h2>
+      <p class="panel-note">Парето-фронт подсвечен, дельта — к победителю. Шаги в ладдере не участвуют: на память они не влияют.</p>
+      <div id="combinations" class="panel"></div>
+    </section>
+
+    <section class="card" id="yaml-card" aria-labelledby="yaml-title">
+      <div class="panel-head">
+        <h2 id="yaml-title">YAML-конфиг</h2>
+        <div class="chips">
+          <button type="button" class="chip" id="copy-yaml">копировать</button>
+          <button type="button" class="chip" id="download-yaml">скачать</button>
+        </div>
+      </div>
+      <p class="panel-note" id="yaml-status" role="status"></p>
+      <pre class="code" id="yaml-out">—</pre>
+    </section>
+
+    <section class="card" id="cli-card" aria-labelledby="cli-title">
+      <h2 id="cli-title">Как запустить</h2>
+      <p class="panel-note">Файл можно сохранить под любым именем: <code>--config</code> и <code>--preset</code> принимают путь.
+        Авторитетная проверка — <code>config show</code> без весов.</p>
+      <div id="cli-panel" class="panel"></div>
+    </section>
+
+    <section class="card" id="notes-card" aria-labelledby="notes-title">
+      <h2 id="notes-title">Что учтено и что отвергнуто</h2>
+      <div id="warnings-panel" class="panel"></div>
+      <div id="suggestions-panel" class="panel"></div>
+      <div id="trace-panel" class="panel"></div>
+    </section>
+
+    <section class="card" id="scan-card" aria-labelledby="scan-title">
+      <h2 id="scan-title">Сканировать YAML</h2>
+      <p class="panel-note" id="scan-help">
+        Вставьте конфиг (свой диалект: маппинги, массивы, кавычки, комментарии). Проверяются ключи по
+        whitelist бэкендов — без Python; авторитетная проверка остаётся за CLI.
+      </p>
+      <label class="sr-only" for="scan-input">YAML-конфиг для проверки</label>
+      <textarea id="scan-input" name="scan-input" rows="10" spellcheck="false" aria-describedby="scan-help"></textarea>
+      <div class="chips">
+        <button type="button" class="chip" id="scan-run">проверить</button>
+        <button type="button" class="chip" id="scan-current">взять текущий</button>
+      </div>
+      <div id="scan-panel" class="panel" role="status"></div>
+    </section>
+
+    <section class="card locked" id="postprocess-card" aria-labelledby="pp-title">
+      <h2 id="pp-title">Постобработка <span class="lock">выключено</span></h2>
+      <p id="pp-text">Модель не передана; стадия считается отдельно. Калькулятор её не считает и размер ею не «добирает»:
+        у стадии свой бюджет VRAM/RAM/диска, он не складывается с рендером.</p>
+      <p class="panel-note" id="pp-reason"></p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Правила и числа — из наших замеров (<code>docs/bench/*.md</code>, <code>AGENTS.md</code> §4).
+      Оценки — модель, а не обещание: <span id="foot-ruleset"></span>.</p>
+  </footer>
+
+  <noscript><p class="noscript">Расчёт идёт в браузере: без JavaScript страница показывает только форму.</p></noscript>
+  <script type="module" src="app.mjs"></script>
+</body>
+</html>

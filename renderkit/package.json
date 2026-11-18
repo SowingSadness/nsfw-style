@@ -1,0 +1,21 @@
+{
+  "name": "qwenstyle-renderkit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Калькулятор настроек рендера по целевой картинке: изоморфное ESM-ядро без зависимостей",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "inventory": "node tools/gen-inventory.mjs",
+    "fit": "node tools/fit.mjs",
+    "audit:measurements": "node tools/audit-measurements.mjs",
+    "plan": "node tools/plan.mjs",
+    "snapshot": "node tools/snapshot.mjs",
+    "start": "node web/serve.mjs"
+  }
+}
