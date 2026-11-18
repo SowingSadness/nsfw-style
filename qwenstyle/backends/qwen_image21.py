@@ -317,6 +317,35 @@ def _load_fp8_transformer(path: Path) -> Any:
 # LoRA
 # --------------------------------------------------------------------------- #
 
+def _setup_vae_tiling(vae: Any, cfg: Any) -> None:
+    """Тайлинг декодера: `vae_tile_px` из `generation.sampler_kwargs`.
+
+    `512` (умолчание спеки) — тайл 512 px, шаг 384; `0` — историческое поведение (тайл 256 px,
+    шаг 192 px: 16 латентов с перекрытием 4); `N > 0` — свой min-размер тайла;
+    `-1` — без тайлинга (декод всего кадра, на 2912x1632 это OOM).
+    Шаг считается как у diffusers по умолчанию (`tile_sample_stride_*`), менять его не нужно:
+    перекрытие задаёт только ширину blend-зоны.
+    """
+    sampler = getattr(cfg.generation, "sampler_kwargs", {}) or {}
+    raw = sampler.get("vae_tile_px")
+    # Умолчание живёт здесь, а не в конфиге: `sampler_kwargs` не материализует дефолты спеки
+    # (так же устроен `offload_blocks`). Явный 0 = историческое 256/192, None = 512.
+    tile = 512 if raw is None else int(raw)
+    if tile < 0:
+        vae.use_tiling = False
+        print("[vae] тайлинг декодера выключен (vae_tile_px=-1)", flush=True)
+        return
+    if tile:
+        # Перекрытие держим как у diffusers по умолчанию (256 → шаг 192, доля 0.75), иначе при
+        # большом тайле и шаге 192 тайлы почти полностью накладывались бы друг на друга.
+        stride = max(1, int(round(tile * 0.75)))
+        vae.enable_tiling(tile_sample_min_height=int(tile), tile_sample_min_width=int(tile),
+                          tile_sample_stride_height=stride, tile_sample_stride_width=stride)
+        print(f"[vae] тайл декодера {tile} px, шаг {stride} px", flush=True)
+    else:
+        vae.enable_tiling()
+
+
 def _load_lora(pipe: Any, cfg: Any) -> None:
     """LoRA. Turbo-адаптер несёт 224 per-module alpha (=128): их нужно вырезать и отдать state dict —
     иначе альфы попадают в state dict и масштаб едет (так предписывает модель-карточка).
@@ -519,6 +548,11 @@ class QwenImage21Backend:
             ParameterSpec("window_attn_margin_px", "sampler", "int", 0, minimum=0, maximum=2048,
                           doc="запас строк сверху и снизу к полосе внимания, px "
                               "(больше = шире контекст, дороже по памяти)"),
+            ParameterSpec("vae_tile_px", "sampler", "int", 512, minimum=0, maximum=8192,
+                          doc="тайлинг декодера VAE, px: 512 (умолчание) — тайл 512 px, шаг 384; "
+                              "16-px сетка на асфальте падает ×2.7 -> ×1.7 при пике 7.4 вместо "
+                              "7.2 ГиБ; 0 = историческое 256/192, -1 = без тайлинга вовсе "
+                              "(на 2912x1632 даёт OOM на декоде)"),
             ParameterSpec("ref_px", "sampler", "int", 0, minimum=0, maximum=2048,
                           doc="сетка референсов, px (0 = размер канваса): на больших канвасах "
                               "энкодер должен видеть референсы мельче, иначе OOM на [4/5]"),
@@ -698,7 +732,7 @@ class QwenImage21Backend:
             pipe.transformer.to("cuda")
         pipe.vae.to("cuda")
         pipe.vae.enable_slicing()
-        pipe.vae.enable_tiling()
+        _setup_vae_tiling(pipe.vae, cfg)
         torch.cuda.empty_cache()
         free, total = torch.cuda.mem_get_info()
         print(f"    vram после загрузки: занято {(total - free) / 2**30:.1f}/{total / 2**30:.1f} GiB",
