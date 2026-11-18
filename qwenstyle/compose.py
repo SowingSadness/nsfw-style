@@ -175,6 +175,7 @@ def compose(spec: PipelineSpec, *, machine: Mapping[str, Any] | None = None) -> 
                             hint=f"допустимые: {sorted(PORT_TYPES)}"))
 
     available: set[str] = set(spec.inputs)
+    consumed: set[str] = set()
     provides: set[str] = set()
     cube_specs: list[CubeSpec] = []
     bindings: list[tuple[str, dict[str, Any]]] = []
@@ -209,6 +210,7 @@ def compose(spec: PipelineSpec, *, machine: Mapping[str, Any] | None = None) -> 
         if cube.produces and not in_place and cube.produces in produced:
             issues.append(Issue("port_duplicate", f"порт {cube.produces!r} уже произведён", cube.id))
         available -= set(cube.consumes)
+        consumed |= set(cube.consumes)
         if cube.produces:
             available.add(cube.produces)
             produced.add(cube.produces)
@@ -230,7 +232,10 @@ def compose(spec: PipelineSpec, *, machine: Mapping[str, Any] | None = None) -> 
     if "pixels" not in available:
         issues.append(Issue("output_missing", "на выходе композиции нет порта 'pixels'",
                             hint=f"сейчас на выходе: {', '.join(sorted(available)) or '—'}"))
-    leftover = sorted(available - {"pixels"})
+    # Неиспользованным считается только **произведённый** порт, который никто не забрал:
+    # «неиспользованный референс» на входе — норма (энкодер читает его через `reads`), а вот
+    # латенты без декодера или conditioning без трансформера — ошибка композиции.
+    leftover = sorted(produced - consumed - {"pixels"})
     if leftover:
         issues.append(Issue("ports_unused", f"на выходе остались неиспользованные порты {leftover}",
                             hint="добавьте кубик-потребитель (например decoder для 'latents')"))
