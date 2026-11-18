@@ -318,32 +318,19 @@ def _load_fp8_transformer(path: Path) -> Any:
 # --------------------------------------------------------------------------- #
 
 def _setup_vae_tiling(vae: Any, cfg: Any) -> None:
-    """Тайлинг декодера: `vae_tile_px` из `generation.sampler_kwargs`.
+    """Настройка декодера — тонкая обёртка над кубиком `decoder.vae.qwen21` (шаг 2 плана).
 
-    `512` (умолчание спеки) — тайл 512 px, шаг 384; `0` — историческое поведение (тайл 256 px,
-    шаг 192 px: 16 латентов с перекрытием 4); `N > 0` — свой min-размер тайла;
-    `-1` — без тайлинга (декод всего кадра, на 2912x1632 это OOM).
-    Шаг считается как у diffusers по умолчанию (`tile_sample_stride_*`), менять его не нужно:
-    перекрытие задаёт только ширину blend-зоны.
+    Старая точка входа (`prepare()`), которая читает `generation.sampler_kwargs["vae_tile_px"]`.
+    Сама логика (тайл, шаг, слайсинг, выключение) живёт в `qwenstyle/cubes/decoder_vae.py`;
+    после cut-over (шаг 7) эта функция исчезнет вместе с `sampler_kwargs`.
     """
+    from ..cubes import decoder_vae
+
     sampler = getattr(cfg.generation, "sampler_kwargs", {}) or {}
     raw = sampler.get("vae_tile_px")
-    # Умолчание живёт здесь, а не в конфиге: `sampler_kwargs` не материализует дефолты спеки
-    # (так же устроен `offload_blocks`). Явный 0 = историческое 256/192, None = 512.
-    tile = 512 if raw is None else int(raw)
-    if tile < 0:
-        vae.use_tiling = False
-        print("[vae] тайлинг декодера выключен (vae_tile_px=-1)", flush=True)
-        return
-    if tile:
-        # Перекрытие держим как у diffusers по умолчанию (256 → шаг 192, доля 0.75), иначе при
-        # большом тайле и шаге 192 тайлы почти полностью накладывались бы друг на друга.
-        stride = max(1, int(round(tile * 0.75)))
-        vae.enable_tiling(tile_sample_min_height=int(tile), tile_sample_min_width=int(tile),
-                          tile_sample_stride_height=stride, tile_sample_stride_width=stride)
-        print(f"[vae] тайл декодера {tile} px, шаг {stride} px", flush=True)
-    else:
-        vae.enable_tiling()
+    params = decoder_vae.DecodeParams.from_mapping(
+        {"tile_px": 512 if raw is None else int(raw)})
+    decoder_vae.setup(vae, params, log=lambda msg: print(msg, flush=True))
 
 
 def _load_lora(pipe: Any, cfg: Any) -> None:
