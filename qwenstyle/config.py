@@ -553,6 +553,12 @@ class RunConfig:
     # Политика вытеснения устаревших эмбеддингов: none|prompt|image|pair (`qwenstyle/cleanup.py`).
     # На ключ кэша НЕ влияет: это обслуживание диска, а не параметр conditioning.
     cache_supersede: str = DEFAULT_CACHE_SUPERSEDE
+    # Корень кэша вычислений (`embeds/`, `_stale/`). `None` — глобальный `cache/embeds`.
+    # `gen --project` подставляет `prompts/<project>/cache`, то есть кэш живёт в проекте: два
+    # проекта не вытесняют записи друг друга политикой `cache_supersede`, а `cache prune`
+    # ограничен своим каталогом. На ключ эмбеддингов НЕ влияет: это место хранения, а не
+    # параметр conditioning (имена файлов внутри каталога те же).
+    cache_dir: str | None = None
     # Отладочный лог прогона: `<кадр>.log` рядом с кадром (`qwenstyle/runlog.py`).
     # `--no-logs` -> False (остаётся только `<кадр>-meta.json`).
     # На кадр и на ключ кэша НЕ влияет: это наблюдение, а не параметр генерации.

@@ -89,6 +89,7 @@ from ..config import (
     readonly_params,
 )
 from ..io import IMAGE_SUFFIXES, frame_stem
+from ..cache import repo_relative
 from ..runlog import log_path, meta_path
 from . import parse_sets
 from ._args import UPSCALE_HELP, parse_upscale
@@ -273,6 +274,10 @@ def build_config(args: argparse.Namespace) -> RunConfig:
     # логи: отладочный лог в подпапке кадра (`qwenstyle/runlog.py`); `--no-logs` — выкл
     if getattr(args, "no_logs", False):
         overrides["logs"] = False
+
+    # где лежат записи эмбеддингов (по умолчанию глобальный `cache/embeds`)
+    if getattr(args, "cache_dir", None):
+        overrides["cache_dir"] = repo_relative(str(args.cache_dir))
 
     cfg = RunConfig.from_profile(preset, **overrides)
     # `merged()` приводит строку 'none' к None (это удобно для `--set`, но не для флагов, где
@@ -470,6 +475,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                              "'' = не кэшировать)")
     memory.add_argument("--rebuild-fp8-cache", action="store_true",
                         help="переконвертировать fp8 и перезаписать кэш")
+    memory.add_argument("--cache-dir", dest="cache_dir", default=None, metavar="DIR",
+                        help="корень кэша эмбеддингов (по умолчанию глобальный cache/embeds); "
+                             "для проекта — prompts/<project>/cache")
     memory.add_argument("--offload", choices=("none", "group"), default=None,
                         help="group = блоки трансформера стримятся с CPU (нужно для 960p+, 2–4x "
                              "медленнее); по умолчанию из пресета (none)")

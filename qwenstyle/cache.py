@@ -65,11 +65,36 @@ def embeds_root(root: Path | str | None = None) -> Path:
     `pipeline.blob_cache()` исторически передаёт `cache`; переписывать его ради новой раскладки
     не нужно — записи найдёт тот же вызов. Всё, что уже указывает на `cache/embeds` (или любой
     другой каталог), возвращается как есть.
+
+    Это же правило работает и для кэша проекта: `prompts/<project>/cache` ->
+    `prompts/<project>/cache/embeds` (см. `project_cache_dir`).
     """
     path = Path(root) if root is not None else Path(CACHE_DIR)
     if path.name == CACHE_ROOT.name:            # `cache` -> `cache/embeds`, `.../cache` -> `.../cache/embeds`
         return path / EMBEDS_DIR.name
     return path
+
+
+def project_cache_dir(base_dir: Path | str) -> Path:
+    """Корень кэша вычислений проекта: `prompts/<project>/cache` (`embeds/` внутри)."""
+    return Path(base_dir) / CACHE_ROOT.name
+
+
+def repo_relative(path: Path | str) -> str:
+    """Путь в виде posix-строки: абсолютный, если он внутри репозитория — относительный.
+
+    Нужно, чтобы `cache_dir` в логах и `meta.json` не зависел от текущего каталога и от того,
+    передали проект относительно или абсолютно.
+    """
+    raw = Path(path)
+    if not raw.is_absolute():
+        return raw.as_posix()
+    from .backends.base import REPO_ROOT
+
+    try:
+        return raw.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return raw.as_posix()
 
 
 # Этапы (stage), которые `BlobCache.list()` ищет в корне кэша. Новый этап кэша = добавить сюда.
@@ -442,6 +467,7 @@ def parse_age(spec: str) -> float:
 
 __all__ = [
     "Blob", "BlobCache", "CACHE_DIR", "CACHE_ROOT", "DEFAULT_STAGES", "EMBEDS_DIR",
-    "EMBEDS_RE", "MODELS_DIR", "EmbedsEntry", "embeds_root",
+    "EMBEDS_RE", "MODELS_DIR", "EmbedsEntry", "embeds_root", "project_cache_dir",
+    "repo_relative",
     "scan_embeds", "plan_prune", "delete_embeds", "human_bytes", "parse_age",
 ]

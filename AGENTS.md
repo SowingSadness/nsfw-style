@@ -57,7 +57,7 @@ K/V в RAM (иначе OOM)**. `VRAM12-*` и `VRAM16-*` пинят `kv_cache: of
 
 | ветка | что внутри | правила |
 |---|---|---|
-| `cache/embeds/` | вычисленный conditioning: `embeds_<md5>_<sha>…_<W>x<H>.pt` (+ `.json`), `text_embeds_…` (FLUX.2/H3), `_stale/` | **вытесняется**: `cache prune … --apply` (без флага — только план) и автоматически политикой `cache_supersede` отложенной задачей в конце прогона; одна запись на сетку, смена `--size`/`--resolution`/`--aspect` ничего не удаляет |
+| `cache/embeds/` | вычисленный conditioning: `embeds_<md5>_<sha>…_<W>x<H>.pt` (+ `.json`), `text_embeds_…` (FLUX.2/H3), `_stale/` | **вытесняется**: `cache prune … --apply` (без флага — только план) и автоматически политикой `cache_supersede` отложенной задачей в конце прогона; одна запись на сетку, смена `--size`/`--resolution`/`--aspect` ничего не удаляет. **У проекта `gen` пишет в `prompts/<project>/cache/embeds/`** (`RunConfig.cache_dir`): вытеснение и `prune` ограничены проектом, два проекта не чистят кэш друг друга; перенос старых записей — `cache move --project <имя> --apply`. Глобальный `cache/embeds/` остаётся для `run` без проекта и для FLUX.2/H3 |
 | `cache/models/` | `fp8_transformer*` (квантование трансформеров) и `weights/` (heretic 8B/32B, ESRGAN) | **не вытесняется никогда**: пересборка только `--rebuild-fp8-cache`; `cache list|show|prune` в эту ветку не заглядывают |
 
 `hf-cache/` (`HF_HOME`) — исходные веса, тоже не чистится автоматически. Ключ эмбеддингов от путей
@@ -158,10 +158,14 @@ python -m qwenstyle env         # версии, CUDA/GPU/VRAM/RAM, offline-ре�
 python -m qwenstyle models list|probe <repo> [--offline]   # реестр бекендов и зондирование без скачивания
 python -m qwenstyle models download --profile <имя> [--dry-run] [--probe] [--yes]   # план/проверка доступа/загрузка
 python -m qwenstyle models download <repo> [--dry-run] [--yes]   # план файлов/размера, само скачивание только с --yes
-python -m qwenstyle cache list [--resolution 640] [--json]  # файлы в cache/embeds, размер, ключевые параметры, возраст
-python -m qwenstyle cache show <name|prefix>                # метаданные записи (сайдкар .json)
+python -m qwenstyle cache list [--resolution 640] [--project <имя>] [--cache-dir DIR] [--json]
+                                # файлы кэша: cache/embeds или prompts/<project>/cache/embeds
+python -m qwenstyle cache show <name|prefix> [--project <имя>]   # метаданные записи (сайдкар .json)
 python -m qwenstyle cache prune [--keep-per-resolution 1] [--group-by prompt|image]
                                 [--older-than 30d] [--legacy] [--all] [--apply]
+                                [--project <имя> | --cache-dir DIR]   # по умолчанию глобальный кэш
+python -m qwenstyle cache move --project <имя> [--apply]      # перенос записей проекта из общего кэша
+                                # выбор по `image_sha` сайдкара (= референсы refs*/ проекта)
 python -m qwenstyle compare-upscale --input <png> --height 960   # метрики апскейлеров на одном кадре
 python -m qwenstyle bench vram --resolution 640 --input <png>   # пик VRAM/RSS по фазам (бывший tools/measure_vram.py; --input обязателен)
 python -m qwenstyle config show base [--set a.b=c] [--explain-params]   # резолвленный RunConfig (единственный источник)

@@ -84,7 +84,8 @@ class Plan:
     #: Все референсы входа (PIL.Image RGBA, порядок значим); пустой список = T2I (`--aspect`).
     images: list[Any]
     in_size: tuple[int, int]
-    crop: tuple[int, int]                        # conditioning-сетка (WxH)
+    crop: tuple[int, int]                        # кадр (WxH): пропорции, апскейл, имя файла
+    cond: tuple[int, int]                        # сетка conditioning (WxH): ключ кэша и сайдкар
     resolution: int                              # sqrt(площадь crop), как `--resolution`
     prompt: str
     prompt_md5: str
@@ -119,6 +120,15 @@ def blob_cache(root: str | Path | None = None) -> BlobCache:
     return BlobCache(raw if raw.is_absolute() else REPO_ROOT / raw)
 
 
+def cfg_cache(cfg: "RunConfig") -> BlobCache:
+    """Кэш вычислений этого прогона: `cfg.cache_dir` (проект) или глобальный `cache`.
+
+    Единственная точка, где решается **где** лежат записи; ключ и имя файла от этого не зависят,
+    поэтому перенос каталога не инвалидирует кэш (R1: изменился путь, а не математика).
+    """
+    return blob_cache(getattr(cfg, "cache_dir", None) or None)
+
+
 # --------------------------------------------------------------------------- #
 # Отложенная очистка кэша (`qwenstyle/cleanup.py`)
 # --------------------------------------------------------------------------- #
@@ -131,7 +141,7 @@ def _cleanup_for(cfg: RunConfig) -> DeferredCleanup | None:
     """
     if normalize_policy(cfg.cache_supersede) == "none":
         return None
-    return DeferredCleanup(blob_cache().root)
+    return DeferredCleanup(cfg_cache(cfg).root)
 
 
 def _cache_write(cfg: RunConfig, plan: Plan) -> CacheWrite | None:
@@ -468,7 +478,7 @@ def _plan(cfg: RunConfig, backend_cls: type, *, verbose: bool = False) -> Plan:
               flush=True)
 
     blob = _cache_blob(backend_cls, cfg, cond, md5, sha)
-    cache = blob_cache()
+    cache = cfg_cache(cfg)
     path = cache.path(blob)
     cached: Any = None
     meta: dict[str, Any] | None = None
@@ -492,7 +502,7 @@ def _plan(cfg: RunConfig, backend_cls: type, *, verbose: bool = False) -> Plan:
     # см. `upscale_effective_factor`). На решение о вызове бекенда это тоже влияет: `run()`
     # вызывает `_postprocess` только при `factor > 0`.
     factor = upscale_effective_factor(cfg, crop)
-    return Plan(images=images, in_size=(in_w, in_h), crop=crop, resolution=resolution,
+    return Plan(images=images, in_size=(in_w, in_h), crop=crop, cond=cond, resolution=resolution,
                 prompt=prompt, prompt_md5=md5, img_sha=sha, blob=blob, cache_path=path,
                 cached=cached, cache_meta=meta, need_encoder=need_encoder, factor=factor,
                 out_path=out_path(cfg, factor))
@@ -550,7 +560,7 @@ def _conditioning(cfg: RunConfig, backend: Any, handle: Any, plan: Plan,
 
     stored = dict(payload or {})
     stored.setdefault("prompt", plan.prompt)      # как в run_style.py: в .pt лежит и промт
-    cache = blob_cache()
+    cache = cfg_cache(cfg)
     path = cache.put(plan.blob, stored, _embeds_meta(cfg, plan, payload))
     print(f"    эмбеддинги сохранены: {path}", flush=True)
     if cleanup is not None:
@@ -575,7 +585,9 @@ def _embeds_meta(cfg: RunConfig, plan: Plan, payload: Any) -> dict[str, Any]:
         "text_encoder": cfg.encoder.name,
         "encoder_dtype": encoder_dtype_canon(cfg.encoder.dtype),
         "encoder_device": encoder_device_canon(cfg.encoder.device),
-        "crop": f"{plan.crop[0]}x{plan.crop[1]}",
+        # Сетка conditioning, а не кадр: с `ref_px` они разные, а ключ и сверка идут по сетке.
+        "crop": f"{plan.cond[0]}x{plan.cond[1]}",
+        "canvas": f"{plan.crop[0]}x{plan.crop[1]}",
         "resolution": plan.resolution,
         "steps": cfg.steps,
         "seed": cfg.seed,
@@ -964,7 +976,7 @@ def dry_run(cfg: RunConfig) -> dict[str, Any]:
         "embeds_cached": plan.cached is not None,
         "embeds_created": (plan.cache_meta or {}).get("created"),
         "need_encoder": plan.need_encoder,
-        "cache_dir": blob_cache().root.as_posix(),
+        "cache_dir": cfg_cache(cfg).root.as_posix(),
         "cache_supersede": normalize_policy(cfg.cache_supersede),
         "precision": cfg.generation.precision,
         "offload": cfg.generation.offload,
@@ -1022,6 +1034,6 @@ def _estimate_out(crop: tuple[int, int], factor: float, target_height: int | Non
 
 
 __all__ = [
-    "DEFAULT_CACHE_DIR", "Plan", "Result", "blob_cache", "dry_run", "embeds_shape",
+    "DEFAULT_CACHE_DIR", "Plan", "Result", "blob_cache", "cfg_cache", "dry_run", "embeds_shape",
     "input_problem", "parse_seeds", "run", "run_batch", "vram_used_gib",
 ]

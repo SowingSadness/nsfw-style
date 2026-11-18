@@ -63,6 +63,7 @@ from ..config import (
 )
 from ..io import batch_paths
 from ..profiles import PROFILE_ORDER, PROFILES
+from ..cache import project_cache_dir, repo_relative
 from ..runlog import write_dir_meta
 from . import parse_sets
 from . import _project as project
@@ -297,6 +298,13 @@ def build_config(args: argparse.Namespace, *, spec: project.ProjectSpec | None,
             overrides["upscale.factor"] = float(value)
     if getattr(args, "no_logs", False):
         overrides["logs"] = False
+    # Где лежат записи эмбеддингов: по умолчанию — в проекте (`prompts/<project>/cache`),
+    # чтобы `cache_supersede`/`cache prune` не вытесняли кэш другого проекта. Явный
+    # `--cache-dir` (а также `--set cache_dir=…`) главнее; без проекта — глобальный `cache`.
+    if getattr(args, "cache_dir", None):
+        overrides["cache_dir"] = repo_relative(str(args.cache_dir))
+    elif getattr(spec, "base_dir", None) is not None:
+        overrides.setdefault("cache_dir", repo_relative(project_cache_dir(spec.base_dir)))
     cfg = cfg.merged(**overrides)
     # Параметры объявляет адаптер модели: если `--set` попал в readonly (например `steps` у H3,
     # где расписание PDD задаёт ровно 6 шагов), предупреждаем, а не делаем вид, что применилось.
@@ -388,6 +396,7 @@ def print_plan(cfg: RunConfig, info: dict[str, Any], session: Path, seeds: list[
     print(f"[plan] cache key={info.get('embeds_key')} (stage={info.get('embeds_stage')}, "
           f"cached={'yes' if info.get('embeds_cached') else 'no'}) -> encoder needed: "
           f"{'yes' if info.get('need_encoder') else 'no'}", flush=True)
+    print(f"[plan] cache dir={info.get('cache_dir')}", flush=True)
     target = info.get("upscale_target_height")
     print(f"[plan] upscale {info.get('upscale_backend')} factor={factor:g} "
           f"target_height={target if target else '-'} -> out {info.get('out_size')}"
@@ -595,6 +604,8 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                              "(можно повторять)")
     source.add_argument("--upscale", type=str, default=None, metavar="F|null",
                         help=UPSCALE_HELP)
+    source.add_argument("--cache-dir", dest="cache_dir", default=None, metavar="DIR",
+                        help="корень кэша эмбеддингов (по умолчанию prompts/<project>/cache)")
 
     seeds = parser.add_argument_group("сколько кадров")
     seeds.add_argument("--seeds", default=None, metavar="SPEC",
