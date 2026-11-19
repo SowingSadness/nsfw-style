@@ -68,11 +68,15 @@ class RewriteParams:
     parse_mode: str = "json"                # json (I2I) | text (T2I: один абзац)
     wrap: str = "fusal"                    # none | fusal
     thinking: bool = True
+    image_px: int = 896                    # длинная сторона референса для PE (vision-токены)
     max_new_tokens: int = 4096
     temperature: float = 1.0
     top_p: float = 0.95
     top_k: int = 20
     dtype: str = "bfloat16"
+    precision: str = "fp8"                 # fp8 = кэш cache/models/fp8_pe_*, bf16 = как есть
+    quant_cache: str = "cache/models/fp8_pe_i2i"
+    quant_rebuild: bool = False
     device: str = "auto"                   # auto = device_map (VRAM+RAM); cpu = 0.18 ток/с
     vram_gib: float = 10.0                 # потолок VRAM при device=auto (остальное -> RAM)
     seed: int = 0
@@ -86,9 +90,12 @@ class RewriteParams:
                    system_prompt=str(values["system_prompt"]), mode=str(values["mode"]),
                    parse_mode=str(values["parse_mode"]),
                    wrap=str(values["wrap"]), thinking=bool(values["thinking"]),
+                   image_px=int(values["image_px"]),
                    max_new_tokens=int(values["max_new_tokens"]),
                    temperature=float(values["temperature"]), top_p=float(values["top_p"]),
                    top_k=int(values["top_k"]), dtype=str(values["dtype"]),
+                   precision=str(values["precision"]), quant_cache=str(values["quant_cache"]),
+                   quant_rebuild=bool(values["quant_rebuild"]),
                    device=str(values["device"]), vram_gib=float(values["vram_gib"]),
                    seed=int(values["seed"]),
                    cache=bool(values["cache"]))
@@ -232,12 +239,33 @@ def system_prompt_text(params: RewriteParams, *, repo_root: Path | None = None) 
 
 
 def load(params: RewriteParams) -> tuple[Any, Any]:
-    """Загрузить модель и процессор (тяжёлые импорты только здесь, не на импорте модуля)."""
+    """Загрузить модель и процессор (тяжёлые импорты только здесь, не на импорте модуля).
+
+    `precision="fp8"` (умолчание) — веса берутся из fp8-кэша (`quant_cache`) и живут в VRAM:
+    9.41B в 8.8 ГиБ вместо 17.55, замер на 4080 — **4.19 ток/с** против 1.07 у `device_map`
+    в bf16 (и 0.18 на CPU). `precision="bf16"` — прежний путь через `device_map`/CPU.
+    """
     import torch
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
     processor = AutoProcessor.from_pretrained(params.repo, revision=params.revision,
                                               local_files_only=True)
+    if params.precision == "fp8":
+        from ..quant.adapters import transformers as quant
+
+        if params.quant_rebuild:
+            quant.build_cache(params.repo, params.quant_cache, log=print)
+        else:
+            quant.build_cache(params.repo, params.quant_cache, log=print)   # внутри reuse по verify
+        model, stats = quant.load_quantized(
+            lambda: AutoModelForImageTextToText.from_pretrained(
+                params.repo, revision=params.revision, dtype=torch.bfloat16,
+                device_map="cpu", low_cpu_mem_usage=True, local_files_only=True),
+            params.quant_cache, warmup=(),
+        )
+        print(f"    [rewrite] fp8-веса: {stats['linear_fp8']} Linear из кэша, "
+              f"{stats['tensors']} тензоров", flush=True)
+        return model, processor
     dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16}.get(params.dtype, torch.bfloat16)
     kwargs: dict[str, Any] = {"dtype": dtype, "local_files_only": True}
     if params.revision:
@@ -254,11 +282,37 @@ def load(params: RewriteParams) -> tuple[Any, Any]:
     return model, processor
 
 
+def _fit_images(images: Sequence[Any], max_side: int) -> list[Any]:
+    """Уменьшить референсы до `max_side` по длинной стороне.
+
+    Vision-токены префикса — главная статья активаций: кадр 1728x1152 даёт ~1900 токенов и 2.5 ГиБ
+    на attention при 2.6K контекста (OOM на 16 ГиБ), а для переписывания промта хватает 896 px
+    (~560 токенов).
+    """
+    if not images or max_side <= 0:
+        return list(images)
+    out = []
+    for image in images:
+        try:
+            width, height = image.size
+        except Exception:                                     # noqa: BLE001 — не PIL
+            out.append(image)
+            continue
+        longest = max(width, height)
+        if longest <= max_side:
+            out.append(image)
+            continue
+        ratio = max_side / float(longest)
+        out.append(image.resize((max(1, int(width * ratio)), max(1, int(height * ratio)))))
+    return out
+
+
 def _generate(model: Any, processor: Any, params: RewriteParams, system_prompt: str,
               instruction: str, images: Sequence[Any]) -> str:
     """Один прогон модели: шаблон чата с thinking, сэмплинг, декод только новых токенов."""
     import torch
 
+    images = _fit_images(images, params.image_px)
     messages = build_messages(system_prompt, instruction, images)
     inputs = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True,
                                            return_dict=True, return_tensors="pt",
@@ -384,6 +438,9 @@ SPECS_COMMON = (
                   doc="fusal = дописать триггер `fusal style.` и [TASK: …]; none = отдать как есть"),
     ParameterSpec("thinking", "cube", "bool", True,
                   doc="enable_thinking в шаблоне чата: чекпоинт обучен с блоком рассуждения"),
+    ParameterSpec("image_px", "cube", "int", 896, minimum=0, maximum=2048,
+                  doc="длинная сторона референса для PE: vision-токены префикса — главная статья "
+                      "активаций (1728px ~1900 ток / 2.5 ГиБ, 896px ~560 ток); 0 = не менять"),
     ParameterSpec("max_new_tokens", "cube", "int", 4096, minimum=64, maximum=24000,
                   doc="потолок токенов ответа (вместе с рассуждением)"),
     ParameterSpec("temperature", "cube", "float", 1.0, minimum=0.0, maximum=2.0,
@@ -392,6 +449,12 @@ SPECS_COMMON = (
     ParameterSpec("top_k", "cube", "int", 20, minimum=0, maximum=200, doc="сэмплинг ответа"),
     ParameterSpec("dtype", "cube", "enum", "bfloat16", choices=("bfloat16", "float16"),
                   doc="точность весов (9.41B: bf16 = 17.55 ГиБ)"),
+    ParameterSpec("precision", "cube", "enum", "fp8", choices=("fp8", "bf16"),
+                  doc="fp8 = кэш fp8_pe_* (8.8 ГиБ в VRAM, 4.19 ток/с); bf16 = device_map/CPU"),
+    ParameterSpec("quant_cache", "cube", "str", "cache/models/fp8_pe_i2i",
+                  doc="каталог fp8-кэша весов PE (пересобирается при смене репозитория/паттернов)"),
+    ParameterSpec("quant_rebuild", "cube", "bool", False,
+                  doc="пересобрать fp8-кэш весов, даже если он годен"),
     ParameterSpec("device", "cube", "enum", "auto", choices=("auto", "cpu"),
                   doc="auto = device_map по VRAM+RAM (умолчание); cpu = резидентно в RAM "
                       "(17.6 ГиБ, замер 0.18 ток/с — только фоллбек)"),
