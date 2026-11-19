@@ -26,6 +26,13 @@ FUSAL (R80 v2), img2img с сохранением композиции. Inferenc
 Аниме — опция: ветки `*-anime` включают адаптер FUSAL 0.7; пресеты без суффикса работают без
 стилевого адаптера.
 
+Расчёт настроек под целевой кадр — `renderkit/` (JS, без зависимостей): производный слой над
+данными проекта (`src/data/measurements.mjs` → модель оценок → самодостаточный YAML). Имён
+пресетов он не использует и Python-пакет не меняет; YAML проверяется существующими командами
+(`config show <файл> --json`, `run --config`, `gen --preset`). После правок `presets/*.yaml`,
+`backends/*.py` или `docs/bench/*` обязательны
+`cd renderkit && npm run inventory -- --check && npm run fit -- --check && npm test`.
+
 Референсы и память: все публичные пресеты наследуют `presets/base.yaml`, где
 `generation.kv_cache: auto-offload-ref2` — то есть **один референс = K/V в VRAM (быстро), 2+ =
 K/V в RAM (иначе OOM)**. `VRAM12-*` и `VRAM16-*` пинят `kv_cache: offload` явно: при 960p/1440p
