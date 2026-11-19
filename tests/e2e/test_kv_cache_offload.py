@@ -39,7 +39,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:              # запуск из любого cwd
     sys.path.insert(0, str(REPO_ROOT))
 sys.dont_write_bytecode = True                  # тест не должен оставлять __pycache__ в пакете

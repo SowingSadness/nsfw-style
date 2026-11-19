@@ -35,7 +35,7 @@ import traceback
 from pathlib import Path
 from typing import Callable
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_DIR = Path(__file__).resolve().parent
 for _path in (REPO_ROOT, TESTS_DIR):
     if str(_path) not in sys.path:               # запуск из любого cwd + импорт фикстур теста

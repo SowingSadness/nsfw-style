@@ -99,8 +99,13 @@ MiniMax-H3-Image: T2I + edit на модульном пайплайне diffuser
 sort), `prompt-<model>.txt`, опциональный `project.yaml` и `out/<YYYYMMDDHHMM>-<tag>/` (кадры
 `<seed>-<steps>.png|.log` + один `meta.json` на сессию); эталоны промтов — `tests/texts/exp*.txt` (см. §5);
 `cache/embeds/` — кэш эмбеддингов, `cache/models/` — квантование и веса энкодеров;
-`hf-cache/` — веса; `out/` — результаты (`out/tests/` — только артефакты тестов); `tests/` — обычные скрипты-проверки (pytest в venv нет и
-ставить нельзя; успех = `ALL PASS` + exit 0, без CUDA скрипт печатает `SKIP`);
+`hf-cache/` — веса; `out/` — результаты (`out/tests/` — только артефакты тестов); `tests/` — обычные
+скрипты-проверки (pytest в venv нет и ставить нельзя; успех = `ALL PASS` + exit 0, без CUDA скрипт
+печатает `SKIP`), разложенные по категориям: `tests/unit/` (без torch, <2 с), `tests/contract/`
+(декларация кубика == реализация), `tests/cube/` (кубик на заглушках, torch-CPU), `tests/e2e/`
+(CUDA + веса), `tests/texts/` (эталонные промты), `tests/_shared.py` (общие пути/CLI),
+`tests/registry.py` (карта «исходник -> тесты») и `tests/run.py` (раннер:
+`tests/run.py --tag unit|contract|cube|e2e`, `--changed <path>`, `--list`, `--map`);
 `.pi/skills/fusal-prompt/` — скилл по написанию промтов (адаптированная версия скилла из LoRA-репозитория, оригиналы — в `references/`).
 
 ## 2. Обязательные правила
@@ -245,7 +250,9 @@ hf cache verify <repo>                                  # целостность
 Лог — наблюдение: ключ кэша эмбеддингов и кадр от него не зависят, ошибка записи не роняет прогон;
 `bench`/`selftest`/тесты ходят в `pipeline.run(..., log=None)` и папок не оставляют. Тесты
 пишут результаты только в `out/tests/`, а промт берут из `tests/texts/exp1.txt` (не из `prompts/`,
-он в `.gitignore`).
+он в `.gitignore`). Быстрые срезы — `tests/run.py --tag unit --tag contract` (секунды, без CUDA),
+по изменённым файлам — `tests/run.py --changed qwenstyle/cubes/decoder_vae.py` (карта в
+`tests/registry.py`: правка кубика гоняет только его тесты, а не весь стенд).
 Вся новая логика добавляется в подкоманду (`qwenstyle/cmd/<name>.py`), а не в ядро; монолиты
 `run_style.py`/`upscale.py`/`colorfix.py`/`tools/*.py` удалены на шаге 11 переезда (git в
 репозитории нет — восстановить нельзя, поэтому добавление возможностей идёт только в пакет).

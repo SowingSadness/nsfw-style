@@ -26,7 +26,7 @@ import tempfile
 import traceback
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 sys.dont_write_bytecode = True                   # тест не должен оставлять __pycache__ в пакете
@@ -35,7 +35,7 @@ from qwenstyle.cmd import _project as project    # noqa: E402
 from qwenstyle.cmd import gen as gen_cmd         # noqa: E402
 from qwenstyle.config import ConfigError, RunConfig   # noqa: E402
 
-TESTS_DIR = Path(__file__).resolve().parent
+TESTS_DIR = Path(__file__).resolve().parents[1]      # `tests/` (файл лежит в `tests/e2e/`)
 TEST_PROMPT = TESTS_DIR / "texts" / "exp1.txt"
 
 

@@ -41,6 +41,12 @@ import tempfile
 import traceback
 from pathlib import Path
 
+# `_shared.py` лежит на уровень выше (`tests/`): тесты живут в `tests/e2e/`, а запускаются скриптом,
+# поэтому `sys.path[0]` — сам `tests/e2e/`, и без этого импорта `import _shared` не найдётся.
+_TESTS_DIR = Path(__file__).resolve().parents[1]
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
 import _shared as shared
 
 #: Seed прогонов: из имени кадра видно, что тег и лог — про один и тот же кадр.
