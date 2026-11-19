@@ -7,7 +7,8 @@
 (8.8 ГиБ) и на замере даёт 4.19 ток/с против 1.07 у `device_map`. Тест фиксирует правила каста и
 численность де-кванта:
 
-1. `quantizable`: только 2D `*.weight`, не под пропуском (`lm_head`, `embed_tokens`, `norm`, `bias`).
+1. `quantizable`: только 2D `*.weight`, не под пропуском (`embed_tokens`, `norm`, `bias`);
+   `lm_head` квантуется — это 2D-вес на 1.2 ГиБ bf16.
 2. `to_fp8`: fp8-вес + per-channel scale, де-квант возвращает вес с относительной ошибкой < 3 %.
 3. `Fp8DequantLinear`: forward равен `F.linear` по де-квантованному весу (бит-в-бит), bias учитывается.
 4. `cache_param_name`: `<n>.weight_scale` -> `<n>.weight.scale`, прочее без изменений.
@@ -39,7 +40,7 @@ from qwenstyle.quant.adapters.transformers import (              # noqa: E402
 def case_quantizable_rules() -> None:
     weight = torch.randn(32, 64, dtype=torch.bfloat16)
     assert quantizable("model.layers.0.self_attn.q_proj.weight", weight)
-    assert not quantizable("lm_head.weight", weight), "lm_head остаётся точным"
+    assert quantizable("lm_head.weight", weight), "lm_head квантуется (2D-вес 151936x4096)"
     assert not quantizable("model.embed_tokens.weight", weight), "эмбеддинги точные"
     assert not quantizable("model.layers.0.input_layernorm.weight", weight), "нормы точные"
     assert not quantizable("model.layers.0.self_attn.q_proj.bias", torch.randn(64)), "bias точный"
