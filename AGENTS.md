@@ -118,7 +118,11 @@ sort), `prompt-<model>.txt`, опциональный `project.yaml` и `out/<YY
 `backends/qwen_image21.generate_latents()` (денойзинг, `output_type="latent"`) → `Qwen21Decoder`
 (денормализация `* latents_std + latents_mean` + `vae.decode`) → `ImagePostprocess`; паритет с прежним
 путём побайтный (`max diff 0`) на 480p/4, 768p/8, 1088p/25, 2912x2176/25 —
-`out/bench/decode-parity.md`, `out/bench/decode-wiring.md`. Посмотреть дерево любого пресета без загрузки весов:
+`out/bench/decode-parity.md`, `out/bench/decode-wiring.md`. API для UI и конструктора: `python -m qwenstyle cubes list|show <id>|test [<id>]|schema [<id>]`
+(данные из `ParameterSpec`, JSON Schema draft-07 по каждому кубику) и
+`python -m qwenstyle compose --spec <файл.yaml> --check` (проверка композиции из файла:
+`{name, inputs, cubes: [{id, params}]}`, rc 1 и коды ошибок без трейсбека). Посмотреть дерево
+любого пресета без загрузки весов:
 `python -m qwenstyle config show VRAM16-4k-slide --cubes` (rc=1 и список ошибок, если композиция
 не сходится; `--json` — для UI). Тот же вывод дают `run --cubes` и `gen --cubes` (это фаза 7a:
 прогон проверяет композицию `pipeline.verify_composition` **до** загрузки весов и падает с

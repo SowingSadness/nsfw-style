@@ -150,6 +150,12 @@ RULES: tuple[Rule, ...] = (
         why="проекция RunConfig -> кубики и печать `config show --cubes`",
     ),
     Rule(
+        paths=("qwenstyle/cmd/cubes.py", "qwenstyle/cmd/compose.py"),
+        tests=("unit/test_cubes_cli.py",),
+        tags=frozenset({"contract"}),
+        why="API кубиков для UI: list/show/test/schema и проверка композиции из файла",
+    ),
+    Rule(
         paths=("qwenstyle/cmd/*.py", "qwenstyle/cli.py"),
         tests=("e2e/test_gen_project.py", "e2e/test_gen_seeds.py"),
         why="подкоманды: разбор флагов и раскладка сессий",
