@@ -112,8 +112,13 @@ sort), `prompt-<model>.txt`, опциональный `project.yaml` и `out/<YY
 (prompt -> prompt) → `encoder.qwen3vl` (prompt+refs -> conditioning) → стратегии
 `strategy.precision.fp8` / `strategy.kv_offload` / `strategy.window_attention` →
 `transformer.qwen_image21` (conditioning -> latents, `requires={fp8,kv_offload}`) →
-`decoder.vae.qwen21` (latents -> pixels) → `post.upscale.esrgan|seedvr2`, `post.colorfix`
-(pixels -> pixels). Посмотреть дерево любого пресета без загрузки весов:
+`decoder.vae.qwen21` (latents -> **frames**, тензор) → `decoder.postprocess.image` (frames -> pixels,
+`image_processor.postprocess`; видео — будущий `decoder.postprocess.video` на том же порту) →
+`post.upscale.esrgan|seedvr2`, `post.colorfix` (pixels -> pixels). Декод в прогоне идёт именно так:
+`backends/qwen_image21.generate_latents()` (денойзинг, `output_type="latent"`) → `Qwen21Decoder`
+(денормализация `* latents_std + latents_mean` + `vae.decode`) → `ImagePostprocess`; паритет с прежним
+путём побайтный (`max diff 0`) на 480p/4, 768p/8, 1088p/25, 2912x2176/25 —
+`out/bench/decode-parity.md`, `out/bench/decode-wiring.md`. Посмотреть дерево любого пресета без загрузки весов:
 `python -m qwenstyle config show VRAM16-4k-slide --cubes` (rc=1 и список ошибок, если композиция
 не сходится; `--json` — для UI). Тот же вывод дают `run --cubes` и `gen --cubes` (это фаза 7a:
 прогон проверяет композицию `pipeline.verify_composition` **до** загрузки весов и падает с
