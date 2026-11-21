@@ -536,6 +536,11 @@ def run(args: argparse.Namespace) -> int:
 
     from .. import pipeline                          # локально: `gen --help` без каркаса и torch
 
+    if getattr(args, "cubes", False):
+        from . import config as config_cmd
+
+        return config_cmd.cubes_view(cfg)
+
     if getattr(args, "dry_run", False):
         try:
             info = pipeline.dry_run(cfg)
@@ -616,6 +621,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     run_group = parser.add_argument_group("режим")
     run_group.add_argument("--dry-run", action="store_true",
                            help="только план (сетка, ключ кэша, сессия) без загрузки весов")
+    run_group.add_argument("--cubes", action="store_true",
+                           help="композиция кубиков этой сессии (стадии, стратегии, бюджет VRAM, "
+                                "ошибки компоновщика) и выход без загрузки весов")
     run_group.add_argument("--no-logs", dest="no_logs", action="store_true",
                            help="не писать <кадр>.log (кадры и meta.json сессии остаются)")
 

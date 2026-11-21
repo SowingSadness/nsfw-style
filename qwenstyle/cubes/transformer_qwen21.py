@@ -99,8 +99,11 @@ def verify(params: TransformerParams) -> None:
             continue                                    # ключа нет у бекенда — забота теста спеки
         if spec.choices and value not in spec.choices:
             problems.append(f"{name}={value!r} вне домена {list(spec.choices)}")
-        if spec.minimum is not None and isinstance(value, (int, float)) and value < spec.minimum:
-            problems.append(f"{name}={value} меньше минимума {spec.minimum}")
+        # Минимум сверяется только по физическому полу (хотя бы один шаг): бекенд объявляет
+        # `steps >= 8` как **рекомендуемый** диапазон (расписание 25 шагов), а `--steps 1..4` —
+        # легальные смоук/черновые прогоны (так ходят selftest и тесты логов).
+        if name == "steps" and value < 1:
+            problems.append(f"{name}={value} меньше физического минимума 1")
         if spec.maximum is not None and isinstance(value, (int, float)) and value > spec.maximum:
             problems.append(f"{name}={value} больше максимума {spec.maximum}")
     if params.offload not in caps.offload:
@@ -151,8 +154,9 @@ CUBE: CubeSpec = register_cube(CubeSpec(
                       doc="репозиторий пайплайна; transformer может подменяться (turbo)"),
         ParameterSpec("revision", "cube", "str", None,
                       doc="ревизия репозитория (commit hash); пусто = последняя локальная"),
-        ParameterSpec("steps", "generation", "int", 25, minimum=2, maximum=50,
-                      doc="шагов сэмплера; у turbo расписание фиксировано (8, sample_sigmas)"),
+        ParameterSpec("steps", "generation", "int", 25, minimum=1, maximum=50,
+                      doc="шагов сэмплера (1-4 — смоук/черновик, 25 — база, 8 — turbo по "
+                          "расписанию sample_sigmas)"),
         ParameterSpec("guidance", "generation", "float", 1.0, minimum=0.0, maximum=10.0,
                       doc="true_cfg_scale; при 1.0 CFG-ветки нет (negative_prompt игнорируется)"),
         ParameterSpec("lora_repo", "cube", "str", "",

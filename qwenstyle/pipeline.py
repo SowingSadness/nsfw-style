@@ -740,6 +740,24 @@ def parse_seeds(spec: str) -> list[int]:
 # Одиночный прогон
 # --------------------------------------------------------------------------- #
 
+def verify_composition(cfg: RunConfig) -> None:
+    """Проверить композицию кубиков до загрузки весов (план `cube-architecture`, шаг 7a).
+
+    Зачем в самом прогоне: компоновщик знает то, чего не знает `RunConfig` (нужна ли стратегия,
+    сходятся ли стадии, помещается ли бюджет). Ошибка здесь стоит секунд и одного текста, а
+    нашлась бы после 6.7 ГиБ fp8-кэша и первого шага.
+
+    Что **не** ошибка: `cube_unsupported` — бекенд ещё не выражен кубиками (MiniMax-H3, FLUX.2).
+    Такие модели живут по-прежнему через свои бекенды, и запрещать их было бы регрессом.
+    """
+    from .composition import check
+
+    composition = check(cfg)
+    blocking = [issue for issue in composition.issues if issue.code != "cube_unsupported"]
+    if blocking:
+        raise ConfigError("композиция кубиков не сходится: " + composition.format_issues())
+
+
 def run(cfg: RunConfig, log: "RunLog | None" = None) -> Result:
     """Один кадр: prepare -> encode/кэш -> generate -> release -> upscale -> save.
 
@@ -748,6 +766,7 @@ def run(cfg: RunConfig, log: "RunLog | None" = None) -> Result:
     рядом с чужими кадрами).
     """
     t0 = time.time()
+    verify_composition(cfg)                         # статическая проверка стадий (без весов)
     backend_cls = get_generation(cfg.generation.backend)
     plan = _plan(cfg, backend_cls, verbose=True)
     if log is not None:

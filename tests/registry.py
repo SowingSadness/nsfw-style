@@ -133,8 +133,9 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         paths=("qwenstyle/pipeline.py",),
-        tests=("e2e/test_generation_logs.py", "e2e/test_gen_folder.py"),
-        why="оркестратор: батчи, имена кадров, лог/meta",
+        tests=("unit/test_run_uses_composition.py", "e2e/test_generation_logs.py",
+               "e2e/test_gen_folder.py"),
+        why="оркестратор: проверка композиции до load, батчи, имена кадров, лог/meta",
     ),
     Rule(
         paths=("qwenstyle/presets/*.yaml", "qwenstyle/profiles.py"),

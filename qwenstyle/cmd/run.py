@@ -404,7 +404,11 @@ def run(args: argparse.Namespace) -> int:
 
 
 def _execute(args: argparse.Namespace, cfg: RunConfig, pipeline: Any) -> int:
-    """`--dry-run` или реальный прогон; `ConfigError` ловит `run()` (один текст, exit 2)."""
+    """`--cubes` / `--dry-run` / реальный прогон; `ConfigError` ловит `run()` (один текст, exit 2)."""
+    if getattr(args, "cubes", False):
+        from . import config as config_cmd
+
+        return config_cmd.cubes_view(cfg)
     if getattr(args, "dry_run", False):
         info = pipeline.dry_run(cfg)
         info["dry_run"] = True
@@ -520,6 +524,10 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     checks.add_argument("--dry-run", action="store_true",
                         help="напечатать план (crop, ключ кэша, нужен ли энкодер, шаги, фактор) "
                              "и выйти, не загружая модель")
+    checks.add_argument("--cubes", action="store_true",
+                        help="напечатать композицию кубиков этого прогона (стадии, стратегии, "
+                             "бюджет VRAM, ошибки компоновщика) и выйти: ровно то, что будет "
+                             "выполняться, без загрузки весов")
 
     logs = parser.add_argument_group("логи")
     logs.add_argument("--no-logs", dest="no_logs", action="store_true",

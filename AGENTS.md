@@ -115,7 +115,10 @@ sort), `prompt-<model>.txt`, опциональный `project.yaml` и `out/<YY
 `decoder.vae.qwen21` (latents -> pixels) → `post.upscale.esrgan|seedvr2`, `post.colorfix`
 (pixels -> pixels). Посмотреть дерево любого пресета без загрузки весов:
 `python -m qwenstyle config show VRAM16-4k-slide --cubes` (rc=1 и список ошибок, если композиция
-не сходится; `--json` — для UI). Проекция `RunConfig -> PipelineSpec` живёт в
+не сходится; `--json` — для UI). Тот же вывод дают `run --cubes` и `gen --cubes` (это фаза 7a:
+прогон проверяет композицию `pipeline.verify_composition` **до** загрузки весов и падает с
+`ConfigError`, если стадии не сходятся или нужно стратегии нет; `cube_unsupported` — не ошибка,
+так живут H3 и FLUX.2). Проекция `RunConfig -> PipelineSpec` живёт в
 `qwenstyle/composition.py`; **пресеты пока остаются YAML-данными** (переезд `run`/`gen` на
 `compose()` — шаг 7), поэтому источник истины для прогона — `RunConfig`, а кубики показывают его
 структуру. H3 (`h3-image`, `max-h3`) кубиками ещё не выражен: `config show <h3> --cubes` даёт
