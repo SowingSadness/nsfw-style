@@ -888,9 +888,56 @@ class QwenImage21Backend:
 
     # -- сэмплирование ----------------------------------------------------- #
 
+    def generate_latents(self, cfg: Any, handle: QwenImage21Handle, cond: Any, image: Any,
+                         seed: int) -> tuple[Any, tuple[int, int]]:
+        """Денойзинг -> **упакованный латент** и канвас (W, H). Декод — отдельная стадия.
+
+        `output_type="latent"` — штатный режим `QwenImage21Pipeline`: тензор отдаётся до
+        `_unpack_latents`, до денормализации (`* latents_std + latents_mean`) и до `vae.decode`.
+        Поэтому денормализация и декод живут в кубике `decoder.vae.qwen21`, а не здесь
+        (паритет побайтно проверен: `out/bench/decode-parity.md`).
+        """
+        latents, canvas = self._denoise(cfg, handle, cond, image, seed, output_type="latent")
+        return latents, canvas
+
+    def decode(self, handle: QwenImage21Handle, latents: Any, canvas: tuple[int, int],
+               seed: int = 0, tile_px: int = 512) -> Any:
+        """Латент -> кадр **через кубики**: `decoder.vae.qwen21` -> `decoder.postprocess.image`.
+
+        Единственный путь декода в проекте: и `generate()` (совместимость с H3/FLUX.2 и `run_batch`),
+        и замеры паритета идут через него, поэтому картинка не может разъехаться между путями.
+        """
+        from ..cubes import decoder_vae, postprocess_image
+        from ..ports import Latents
+
+        pipe_obj = handle.pipe
+        unpacked = pipe_obj._unpack_latents(latents, int(canvas[1]), int(canvas[0]),
+                                            pipe_obj.vae_scale_factor)
+        decoder = decoder_vae.Qwen21Decoder.from_mapping({"tile_px": int(tile_px)}).setup(
+            pipe_obj.vae)
+        frames = decoder(Latents(x=unpacked, canvas=(int(canvas[0]), int(canvas[1])),
+                                 seed=int(seed)))
+        post = postprocess_image.ImagePostprocess.from_mapping({}).setup(pipe_obj.image_processor)
+        return post(frames).image
+
     def generate(self, cfg: Any, handle: QwenImage21Handle, cond: Any, image: Any,
                  seed: int) -> Any:
-        """Денойзинг с готовыми эмбеддингами. Порядок важен: перенос на GPU -> подмена
+        """Кадр: денойзинг (`generate_latents`) + декод кубиками (`decode`).
+
+        Обёртка оставлена для `run_batch`, `bench` и тестов: они работают с готовой картинкой.
+        Порядок стадий теперь такой же, как в композиции: denoise (трансформер) -> латент ->
+        `decoder.vae.qwen21` -> `decoder.postprocess.image`.
+        """
+        latents, canvas = self.generate_latents(cfg, handle, cond, image, seed)
+        sampler = getattr(cfg.generation, "sampler_kwargs", {}) or {}
+        return self.decode(handle, latents, canvas, seed=seed,
+                           tile_px=int(sampler.get("vae_tile_px", 512)))
+
+    def _denoise(self, cfg: Any, handle: QwenImage21Handle, cond: Any, image: Any,
+                 seed: int, *, output_type: str) -> Any:
+        """Тело денойзинга: `output_type="pil"` -> кадр, `"latent"` -> упакованный латент + канвас.
+
+        Порядок важен: перенос на GPU -> подмена
         `encode_prompt` -> `pipe(...)`: `__call__` не принимает `image_pad_mask`, а с `image` +
         `prompt_embeds` падает, поэтому эмбеддинги отдаются через замыкание.
 
@@ -996,7 +1043,8 @@ class QwenImage21Backend:
                         output_resolution=resolution,
                         generator=torch.Generator("cpu").manual_seed(int(seed)),
                         use_kv_cache=(kv_mode != "false"),
-                    ).images[0]
+                        output_type=output_type,
+                    ).images
         finally:
             if sliding is not None:
                 from . import qwen_sliding
@@ -1007,7 +1055,7 @@ class QwenImage21Backend:
 
             uninstall()
         print(f"    ok, {time.time() - started:.0f}s", flush=True)
-        return result
+        return (result, (canvas_w, canvas_h)) if output_type == "latent" else result
 
     # -- освобождение ------------------------------------------------------ #
 

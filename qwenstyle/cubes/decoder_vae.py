@@ -26,9 +26,9 @@ from typing import Any, ClassVar, Mapping
 
 from ..backends.base import ParameterSpec, ResourceBudget
 from ..cube import CubeContext, CubeSpec, Stage, register_cube
-from ..ports import Latents, Pixels
+from ..ports import Frames, Latents
 
-__all__ = ["CUBE", "DecodeParams", "decode", "setup", "tiling_for"]
+__all__ = ["CUBE", "DecodeParams", "Qwen21Decoder", "decode", "setup", "tiling_for"]
 
 #: Доля шага от размера тайла: у diffusers по умолчанию 192/256 = 0.75.
 STRIDE_RATIO = 0.75
@@ -99,18 +99,19 @@ def setup(vae: Any, params: DecodeParams, *, log: Any = None) -> DecodeParams:
 
 
 def decode(vae: Any, latents: Latents, params: DecodeParams | None = None, *,
-           image_processor: Any = None, log: Any = None) -> Pixels:
-    """Декодировать латент канваса в кадр. `params=None` — настройки по умолчанию кубика.
+           log: Any = None) -> Frames:
+    """Декодировать латент в **тензор** кадра (`Frames`). `params=None` — умолчания кубика.
 
-    Шаги повторяют блок декода diffusers (`QwenImage21DecodeBlock`) один-в-один, иначе кадр не совпадёт
+    Шаги повторяют блок декода diffusers (`QwenImage21DecodeStep`) один-в-один, иначе кадр не совпадёт
     с прогоном через пайплайн:
 
     1. латент `(B, C, T, H, W)` или `(B, C, H, W)` (последний получает ось `T=1`);
     2. **денормализация** по `vae.config.latents_mean`/`latents_std` — без неё картинка
        разъезжается по яркости и цвету (в пайплайне это делает блочный код, а не VAE);
-    3. `vae.decode(...)(return_dict=False)[0][:, :, 0]` — срез временной оси; результат тензор;
-    4. `image_processor.postprocess(..., output_type="pil")`, если обработчик передан: именно так
-       пайплайн отдаёт `PIL.Image`. Без обработчика возвращается тензор (заглушки и тесты).
+    3. `vae.decode(..., return_dict=False)[0]` — тензор `(B, C, T, H, W)` (или 4D).
+
+    В `PIL.Image` (и вообще в контейнер) тензор превращает **следующий** кубик —
+    `decoder.postprocess.image`: у картинки и видео разные форматы, и декодер не должен их знать.
     """
     import torch
 
@@ -129,10 +130,52 @@ def decode(vae: Any, latents: Latents, params: DecodeParams | None = None, *,
             std_t = torch.tensor(std).view(1, z_dim, 1, 1, 1).to(x.device, x.dtype)
             x = x * std_t + mean_t
         decoded = vae.decode(x, return_dict=False)[0]
-        image = decoded[:, :, 0] if decoded.ndim == 5 else decoded
-    if image_processor is not None:
-        image = image_processor.postprocess(image, output_type="pil")[0]
-    return Pixels(image=image, stage_trace=("decoder.vae.qwen21",))
+    # `vae.decode` уже отдаёт пиксельную сетку (проверено замером паритета: латент 30x54 ->
+    # декод 480x864 при VAE-факторе 16), поэтому размер берётся из тензора как есть.
+    temporal = int(decoded.shape[2]) if decoded.ndim == 5 else 1
+    height = int(decoded.shape[-2])
+    width = int(decoded.shape[-1])
+    return Frames(x=decoded, size=(width, height), temporal=temporal,
+                  source="decoder.vae.qwen21")
+
+
+class Qwen21Decoder:
+    """Декодер VAE как объект: **параметры в конструкторе**, декод — через `__call__`.
+
+    Почему объект, а не свободная функция (шаг 7b плана `cube-architecture`):
+
+    * параметры (`tile_px`/`tiling`/`slicing`/`dtype`/`device`) принадлежат экземпляру, а не вызову —
+      их нельзя случайно перепутать или перезаписать на середине батча;
+    * VAE — тяжёлый компонент: `setup(vae)` один раз применяет tiling/slicing и держит ссылку,
+      а `__call__` остаётся коротким (его зовёт `pipeline.run` и замеры паритета).
+
+    Пример:
+
+        dec = Qwen21Decoder.from_mapping({"tile_px": 512})
+        dec.setup(pipe.vae)
+        frames = dec(latents)               # -> Frames (тензор, ещё не PIL)
+    """
+
+    def __init__(self, params: DecodeParams | None = None) -> None:
+        self.params = params or DecodeParams()
+        self.vae: Any = None
+        self._ready = False
+
+    @classmethod
+    def from_mapping(cls, params: Mapping[str, Any] | None = None) -> "Qwen21Decoder":
+        return cls(DecodeParams.from_mapping(params or {}))
+
+    def setup(self, vae: Any, *, log: Any = None) -> "Qwen21Decoder":
+        """Привязать VAE и применить настройки тайлинга/слайсинга (один раз на прогон)."""
+        setup(vae, self.params, log=log)
+        self.vae = vae
+        self._ready = True
+        return self
+
+    def __call__(self, latents: Latents) -> Frames:
+        if not self._ready or self.vae is None:
+            raise RuntimeError("Qwen21Decoder: сначала setup(vae) — декодер без VAE не работает")
+        return decode(self.vae, latents, self.params)
 
 
 def _self_test(ctx: CubeContext) -> None:
@@ -168,7 +211,7 @@ CUBE: CubeSpec = register_cube(CubeSpec(
     id="decoder.vae.qwen21",
     stage=Stage.DECODER,
     consumes=frozenset({"latents"}),
-    produces="pixels",
+    produces="frames",
     params=(
         ParameterSpec("tile_px", "cube", "int", 512, minimum=-1, maximum=8192,
                       doc="тайл декодера, px: 512 (умолчание) = 512/384; 0 = историческое 256/192; "
@@ -184,5 +227,5 @@ CUBE: CubeSpec = register_cube(CubeSpec(
     ),
     budget=ResourceBudget(weights_bf16_gib=1.35, notes="VAE Qwen-Image-2.1 (238 тензоров)"),
     self_test=_self_test,
-    doc="VAE-декодер Qwen-Image-2.1: латент канваса -> кадр, с тайлингом/слайсингом",
+    doc="VAE-декодер Qwen-Image-2.1: латент -> тензор кадра (frames), с тайлингом/слайсингом; в PIL его превращает decoder.postprocess.image",
 ))

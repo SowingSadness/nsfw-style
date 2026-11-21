@@ -4,8 +4,10 @@
 Успех: `PASS` по каждому кейсу, `ALL PASS` и exit 0; провал: `FAIL <кейс>: ...` и exit 1.
 Без весов и без CUDA: композитор ничего не загружает, он проверяет данные.
 
-Зачем (план `cube-architecture`, шаг 6, приёмка пререквизита): до этого шага композиция
-`source -> encoder -> transformer -> decoder -> post` не собиралась — не хватало пяти кубиков.
+Зачем (план `cube-architecture`, шаги 6 и 7b): до шага 6 композиция
+`source -> encoder -> transformer -> decoder -> post` не собиралась — не хватало пяти кубиков; а после
+разреза декодера (шаг 7b) появилось звено `decoder.vae.qwen21 (frames) ->
+decoder.postprocess.image (pixels)`, и цепочка должна сходиться именно так.
 Тест фиксирует, что теперь собирается и, главное, что компоновщик по-прежнему **ловит** ошибки:
 
 1. полная цепочка 2912x2176 (окно внимания + kv offload + fp8 + апскейл + цветокоррекция) — `ok`;
@@ -49,6 +51,7 @@ def full_chain(**overrides: object) -> PipelineSpec:
         B("strategy.window_attention", {"window_attn_px": 1088, "window_attn_margin_px": 448}),
         B("transformer.qwen_image21", {"steps": 25, "offload": "group", "lora_scale": 0.6}),
         B("decoder.vae.qwen21", {"tile_px": 512}),
+        B("decoder.postprocess.image", {"output_type": "pil"}),
         B("post.upscale.esrgan", {"target_height": 2160}),
         B("post.colorfix", {"mode": "wavelet"}),
     ]
@@ -74,6 +77,7 @@ def case_t2i_chain_is_ok() -> None:
         B("strategy.kv_offload", {"mode": "true"}),
         B("transformer.qwen_image21", {"steps": 8}),
         B("decoder.vae.qwen21", {}),
+        B("decoder.postprocess.image", {}),
     )
     composition = compose(PipelineSpec(name="t2i", cubes=cubes, inputs=frozenset({"prompt"})),
                           machine=MACHINE)
@@ -112,11 +116,23 @@ def case_missing_strategy_is_reported() -> None:
 
 def case_forgotten_decoder_is_reported() -> None:
     cubes = tuple(b for b in full_chain().cubes
-                  if b.cube_id not in ("decoder.vae.qwen21", "post.upscale.esrgan",
+                  if b.cube_id not in ("decoder.vae.qwen21",
+                                       "decoder.postprocess.image", "post.upscale.esrgan",
                                        "post.colorfix"))
     composition = compose(PipelineSpec(name="no-decoder", cubes=cubes))
     assert "ports_unused" in codes(composition), codes(composition)
     assert "output_missing" in codes(composition), codes(composition)
+
+
+def case_missing_postprocess_is_reported() -> None:
+    """Кубик декода отдаёт `frames`: без `decoder.postprocess.image` композитор обязан ругаться."""
+    cubes = tuple(b for b in full_chain().cubes if b.cube_id != "decoder.postprocess.image")
+    composition = compose(PipelineSpec(name="no-postprocess", cubes=cubes))
+    assert "ports_unused" in codes(composition), codes(composition)
+    unused = [i for i in composition.issues if i.code == "ports_unused"][0]
+    assert "frames" in unused.message, unused.message
+    # post.upscale.esrgan остаётся без pixels -> это тоже видно компоновщику
+    assert "port_missing" in codes(composition), codes(composition)
 
 
 def case_stage_order_is_reported() -> None:
@@ -161,6 +177,7 @@ CASES = [
     ("бюджет VRAM в фактической точности", case_budget_counts_fp8),
     ("нет fp8-стратегии -> strategy_missing", case_missing_strategy_is_reported),
     ("нет декодера -> ports_unused", case_forgotten_decoder_is_reported),
+    ("нет постпроцесса -> висит frames", case_missing_postprocess_is_reported),
     ("энкодер раньше источника -> stage_order", case_stage_order_is_reported),
     ("опечатка параметра -> param_unknown", case_unknown_param_is_reported),
     ("все кубики зарегистрированы", case_every_cube_in_registry_has_stage),

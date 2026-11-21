@@ -18,8 +18,9 @@
 * `strategy.precision.fp8` — только при `generation.precision=fp8` (bf16 идёт без стратегии);
 * `strategy.kv_offload` — если бекенд заявляет поле `kv_cache` (сейчас `qwen_image21`);
 * `strategy.window_attention` — если `sampler_kwargs.window_attn_px > 0`;
-* `transformer.qwen_image21` + `decoder.vae.qwen21` — только для бекендов, у которых есть кубик
-  (сегодня `qwen_image21`; для остальных `unsupported_reason()` говорит почему);
+* `transformer.qwen_image21` + `decoder.vae.qwen21` + `decoder.postprocess.image` — только для
+  бекендов, у которых есть кубик (сегодня `qwen_image21`; для остальных `unsupported_reason()`
+  говорит почему); декодер отдаёт `frames`, в картинку их превращает постпроцесс;
 * постобработка — `post.upscale.esrgan`/`post.upscale.seedvr2` при включённом апскейле,
   `post.colorfix` при `upscale.color_fix != none`.
 """
@@ -123,6 +124,9 @@ def spec_of(cfg: Any, *, name: str = "") -> PipelineSpec:
         cubes.append(CubeBinding("decoder.vae.qwen21", {
             "tile_px": int(_sampler(cfg, "vae_tile_px", 512)),
         }))
+        # Декодер отдаёт тензор (`frames`), картинку делает следующий кубик: формат результата —
+        # отдельная стадия (в будущем рядом встанет decoder.postprocess.video на том же порту).
+        cubes.append(CubeBinding("decoder.postprocess.image", {"output_type": "pil"}))
 
     if up.backend == "esrgan" and (up.factor or up.target_height):
         cubes.append(CubeBinding("post.upscale.esrgan", {

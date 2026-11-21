@@ -13,7 +13,9 @@
 3. проекция не теряет параметры: `offload`, `kv_cache`, окно внимания, `tile_px`, апскейл
    и цветокоррекция переезжают в кубики;
 4. `precision=bf16` убирает fp8-стратегию (и бюджет VRAM растёт);
-5. референсы на входе (`--input`) дают порты `prompt+refs`, без них — только `prompt`.
+5. референсы на входе (`--input`) дают порты `prompt+refs`, без них — только `prompt`;
+6. разрез декодера (шаг 7b): за `decoder.vae.qwen21` (`latents -> frames`) всегда идёт
+   `decoder.postprocess.image` (`frames -> pixels`), иначе композиция не сходится.
 """
 from __future__ import annotations
 
@@ -77,6 +79,11 @@ def case_slide_preset_params() -> None:
     assert transformer["offload"] == "group", transformer
     assert transformer["steps"] == 25, transformer
     assert params_of(spec, "decoder.vae.qwen21")["tile_px"] == 512
+    # декодер отдаёт тензор, в картинку его превращает постпроцесс — цепочка обязана это показать
+    ids_in_order = ids(spec)
+    decoder_at = ids_in_order.index("decoder.vae.qwen21")
+    assert ids_in_order[decoder_at + 1] == "decoder.postprocess.image", ids_in_order
+    assert params_of(spec, "decoder.postprocess.image")["output_type"] == "pil"
     # `upscale: null` — пост-апскейла в композиции нет, цветокоррекция есть
     assert "post.upscale.esrgan" not in ids(spec), ids(spec)
     assert params_of(spec, "post.colorfix")["mode"] == "wavelet"

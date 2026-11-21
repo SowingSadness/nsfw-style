@@ -20,6 +20,7 @@ from typing import Any, ClassVar
 __all__ = [
     "PORT_TYPES",
     "Conditioning",
+    "Frames",
     "Latents",
     "Pixels",
     "Prompt",
@@ -81,6 +82,27 @@ class Latents:
 
 
 @dataclass(frozen=True)
+class Frames:
+    """Тензор кадра после `vae.decode`, ещё **не** картинка.
+
+    Зачем отдельный порт (а не сразу `Pixels`): декодер VAE умеет отдавать не только изображение,
+    но и последовательность (временная ось `T`); преобразование тензора в `PIL.Image`/файл — это
+    отдельная стадия (`decoder.postprocess.image`, в будущем `decoder.postprocess.video`), и она
+    отвечает за контейнер и формат, а не декодер.
+
+    `x` — значения в диапазоне ~[-1, 1] (то, что postprocess нормализует в 0..255),
+    `size` — (W, H) в пикселях, `temporal` — длина по времени (1 = один кадр).
+    """
+
+    port: ClassVar[str] = "frames"
+
+    x: Any = None
+    size: tuple[int, int] = (0, 0)
+    temporal: int = 1
+    source: str = ""
+
+
+@dataclass(frozen=True)
 class Pixels:
     """Готовый кадр в пикселях. `trace` — какие кубики его сделали (для лога и метаданных)."""
 
@@ -92,7 +114,7 @@ class Pixels:
 
 #: Все объявленные порты. Композитор сверяет `consumes`/`produces`/`reads` с этим набором.
 PORT_TYPES: dict[str, type] = {
-    cls.port: cls for cls in (Prompt, RefImages, Conditioning, Latents, Pixels)
+    cls.port: cls for cls in (Prompt, RefImages, Conditioning, Latents, Frames, Pixels)
 }
 
 

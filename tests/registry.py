@@ -58,10 +58,10 @@ RULES: tuple[Rule, ...] = (
     ),
     # -- кубики: у каждого свой точечный набор ------------------------------- #
     Rule(
-        paths=("qwenstyle/cubes/decoder_vae.py",),
-        tests=("unit/test_decoder_vae.py",),
+        paths=("qwenstyle/cubes/decoder_vae.py", "qwenstyle/cubes/postprocess_image.py"),
+        tests=("unit/test_decoder_vae.py", "cube/test_postprocess_image.py"),
         tags=frozenset({"contract"}),
-        why="тайлинг/слайсинг декодера, параметры кубика",
+        why="тайлинг/слайсинг декодера, класс Qwen21Decoder, frames -> PIL в постпроцессе",
     ),
     Rule(
         paths=("qwenstyle/cubes/encoder_qwen3vl.py", "qwenstyle/backends/qwen_image21.py"),
