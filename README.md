@@ -382,6 +382,50 @@ python -m qwenstyle gen --preset VRAM16-release --prompt my-scene --aspect 16:9 
   --set generation.sampler_kwargs.window_attn_margin_px=384
 ```
 
+## Сборка пайплайна из кубиков
+
+Пайплайн описан стадиями-кубиками (14 штук в реестре), и их можно смотреть и проверять **без
+загрузки весов и без GPU**:
+
+```text
+python -m qwenstyle cubes list                     # id, стадия, порты, параметры, бюджет
+python -m qwenstyle cubes show decoder.vae.qwen21  # параметры с диапазонами и описанием
+python -m qwenstyle cubes test                     # self_test всех кубиков (секунды)
+python -m qwenstyle cubes schema | --json          # JSON Schema (draft-07) для конструктора
+python -m qwenstyle compose --spec pipeline.yaml --check   # проверить композицию из файла
+```
+
+Цепочка кадра читается так: `source.project` (проект → `prompt`+`refs`) → `encoder.qwen3vl`
+(`prompt`+`refs` → `conditioning`) → `transformer.qwen_image21` (`conditioning` → `latents`,
+требует стратегии `strategy.precision.fp8` и `strategy.kv_offload`) → `decoder.vae.qwen21`
+(`latents` → `frames`, тензор) → `decoder.postprocess.image` (`frames` → `pixels`) →
+`post.upscale.esrgan` / `post.colorfix` (`pixels` → `pixels`). Промежуточный порт `frames`
+отделяет декодирование от формата результата: рядом с картинкой в будущем встанет
+`decoder.postprocess.video` без правки декодера.
+
+Файл композиции — обычный YAML, его понимает `compose --check`:
+
+```yaml
+name: my-frame
+inputs: [prompt, refs]
+cubes:
+  - id: source.project
+    params: {dir: prompts/my-project, refs: refs}
+  - id: encoder.qwen3vl
+  - id: strategy.precision.fp8
+  - id: strategy.kv_offload
+    params: {mode: offload}
+  - id: transformer.qwen_image21
+    params: {steps: 25, offload: group}
+  - id: decoder.vae.qwen21
+  - id: decoder.postprocess.image
+```
+
+Несовместимая цепочка отклоняется до запуска: `compose --check` печатает коды
+(`port_missing`, `ports_unused`, `strategy_missing`, `param_unknown`, `stage_order`) и возвращает
+код 1. Дерево конкретного пресета показывает `python -m qwenstyle config show <preset> --cubes`
+(то же — `run --cubes`, `gen --cubes`).
+
 ## Кеши и диск
 
 | что | где | можно ли чистить |
