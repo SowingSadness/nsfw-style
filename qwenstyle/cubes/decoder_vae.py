@@ -99,13 +99,39 @@ def setup(vae: Any, params: DecodeParams, *, log: Any = None) -> DecodeParams:
 
 
 def decode(vae: Any, latents: Latents, params: DecodeParams | None = None, *,
-           log: Any = None) -> Pixels:
-    """Декодировать латент канваса в кадр. `params=None` — настройки по умолчанию кубика."""
+           image_processor: Any = None, log: Any = None) -> Pixels:
+    """Декодировать латент канваса в кадр. `params=None` — настройки по умолчанию кубика.
+
+    Шаги повторяют блок декода diffusers (`QwenImage21DecodeBlock`) один-в-один, иначе кадр не совпадёт
+    с прогоном через пайплайн:
+
+    1. латент `(B, C, T, H, W)` или `(B, C, H, W)` (последний получает ось `T=1`);
+    2. **денормализация** по `vae.config.latents_mean`/`latents_std` — без неё картинка
+       разъезжается по яркости и цвету (в пайплайне это делает блочный код, а не VAE);
+    3. `vae.decode(...)(return_dict=False)[0][:, :, 0]` — срез временной оси; результат тензор;
+    4. `image_processor.postprocess(..., output_type="pil")`, если обработчик передан: именно так
+       пайплайн отдаёт `PIL.Image`. Без обработчика возвращается тензор (заглушки и тесты).
+    """
     import torch
 
     params = params or DecodeParams()
+    x = latents.x
     with torch.no_grad():
-        image = vae.decode(latents.x.to(vae.dtype)).sample
+        if x.ndim == 4:
+            x = x.unsqueeze(dim=2)
+        x = x.to(vae.dtype)
+        config = getattr(vae, "config", None)
+        mean = getattr(config, "latents_mean", None)
+        std = getattr(config, "latents_std", None)
+        if mean is not None and std is not None:
+            z_dim = int(getattr(config, "z_dim", x.shape[1]))
+            mean_t = torch.tensor(mean).view(1, z_dim, 1, 1, 1).to(x.device, x.dtype)
+            std_t = torch.tensor(std).view(1, z_dim, 1, 1, 1).to(x.device, x.dtype)
+            x = x * std_t + mean_t
+        decoded = vae.decode(x, return_dict=False)[0]
+        image = decoded[:, :, 0] if decoded.ndim == 5 else decoded
+    if image_processor is not None:
+        image = image_processor.postprocess(image, output_type="pil")[0]
     return Pixels(image=image, stage_trace=("decoder.vae.qwen21",))
 
 

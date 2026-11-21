@@ -92,6 +92,65 @@ def case_defaults_and_unknown() -> None:
     assert parsed.dtype == "bfloat16" and parsed.device == "auto"
 
 
+def case_decode_denormalizes_like_pipeline() -> None:
+    """`decode` повторяет блок декода diffusers: денормализация + срез временной оси.
+
+    Заглушка VAE воспроизводит контракт настоящего: `config.latents_mean`/`latents_std`,
+    `decode(x, return_dict=False)` возвращает `(B, C, T, H, W)`.
+    """
+    import torch
+
+    class StubConfig:
+        z_dim = 2
+        latents_mean = (1.0, 2.0)
+        latents_std = (2.0, 3.0)
+
+    class StubVAE:
+        dtype = torch.float32
+        config = StubConfig()
+
+        def __init__(self) -> None:
+            self.seen = None
+
+        def decode(self, x, return_dict: bool = True):
+            self.seen = x.detach().clone()
+            return (x,)
+
+    vae = StubVAE()
+    # (B, C, H, W) -> ось T=1 добавляется внутри; денормализация: x*std + mean
+    latents = decoder_vae.Latents(x=torch.ones(1, 2, 1, 1))
+    pixels = decoder_vae.decode(vae, latents)
+    assert vae.seen.shape == (1, 2, 1, 1, 1), vae.seen.shape
+    assert torch.allclose(vae.seen, torch.tensor([[[[[3.0]]], [[[5.0]]]]])), vae.seen
+    assert pixels.image.shape == (1, 2, 1, 1), pixels.image.shape
+    assert pixels.stage_trace == ("decoder.vae.qwen21",), pixels.stage_trace
+
+
+def case_decode_postprocesses_with_processor() -> None:
+    """Если передан `image_processor`, кадр отдаётся как PIL — так его получает пайплайн."""
+    import torch
+
+    class StubVAE:
+        dtype = torch.float32
+
+        def decode(self, x, return_dict: bool = True):
+            return (torch.zeros(x.shape[0], 3, 1, 4, 4),)
+
+    class StubProcessor:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def postprocess(self, image, output_type: str = "pil"):
+            self.calls.append((tuple(image.shape), output_type))
+            return ["PIL"]
+
+    processor = StubProcessor()
+    pixels = decoder_vae.decode(StubVAE(), decoder_vae.Latents(x=torch.zeros(1, 2, 1, 4, 4)),
+                                image_processor=processor)
+    assert pixels.image == "PIL", pixels.image
+    assert processor.calls == [((1, 3, 4, 4), "pil")], processor.calls
+
+
 def case_contract() -> None:
     cube = get_cube("decoder.vae.qwen21")
     assert cube.stage is Stage.DECODER, cube.stage
@@ -109,6 +168,8 @@ CASES = [
     ("шаг = 0.75 * тайл", case_stride_ratio),
     ("tiling=False", case_flag_off),
     ("дефолты и неизвестные ключи", case_defaults_and_unknown),
+    ("decode: денормализация и срез T", case_decode_denormalizes_like_pipeline),
+    ("decode: postprocess в PIL", case_decode_postprocesses_with_processor),
     ("контракт кубика", case_contract),
 ]
 
