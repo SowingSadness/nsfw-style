@@ -78,7 +78,7 @@ class CubeSpec:
     id: str
     stage: Stage
     consumes: frozenset[str] = frozenset()
-    produces: str | None = None
+    produces: str | frozenset[str] | None = None
     reads: frozenset[str] = frozenset()
     params: tuple[ParameterSpec, ...] = ()
     budget: ResourceBudget = ResourceBudget()
@@ -89,9 +89,22 @@ class CubeSpec:
 
     # -- производные свойства ---------------------------------------------- #
     @property
+    def outputs(self) -> frozenset[str]:
+        """Порты, которые кубик производит (одна строка — частный случай набора).
+
+        Много портов бывает у источника: `source.project` отдаёт и `prompt`, и `refs` — они приходят
+        из одного проекта, и разделять их на два кубика значило бы дважды разбирать один yaml.
+        """
+        if self.produces is None:
+            return frozenset()
+        if isinstance(self.produces, str):
+            return frozenset({self.produces})
+        return frozenset(self.produces)
+
+    @property
     def is_strategy(self) -> bool:
         """Декоратор-стратегия: ничего не потребляет и не производит, только `provides`."""
-        return self.produces is None and not self.consumes
+        return not self.outputs and not self.consumes
 
     @property
     def param_names(self) -> frozenset[str]:
@@ -105,7 +118,8 @@ class CubeSpec:
 
     def summary(self) -> str:
         ports_in = ", ".join(sorted(self.consumes | self.reads)) or "—"
-        return (f"{self.id:28} {self.stage.value:11} {ports_in} -> {self.produces or '—'}"
+        ports_out = "|".join(sorted(self.outputs)) or "—"
+        return (f"{self.id:28} {self.stage.value:11} {ports_in} -> {ports_out}"
                 f"  params={len(self.params)}"
                 f"{'  provides=' + '|'.join(sorted(self.provides)) if self.provides else ''}")
 
@@ -125,14 +139,15 @@ def _validate(spec: CubeSpec) -> None:
     if unknown:
         raise CubeError(f"{spec.id}: неизвестные порты входа {sorted(unknown)}; "
                         f"допустимые: {sorted(PORT_TYPES)}")
-    if spec.produces is not None and spec.produces not in PORT_TYPES:
-        raise CubeError(f"{spec.id}: неизвестный порт выхода {spec.produces!r}; "
+    unknown_out = spec.outputs - set(PORT_TYPES)
+    if unknown_out:
+        raise CubeError(f"{spec.id}: неизвестные порты выхода {sorted(unknown_out)}; "
                         f"допустимые: {sorted(PORT_TYPES)}")
-    if spec.produces is None and spec.consumes:
+    if not spec.outputs and spec.consumes:
         raise CubeError(f"{spec.id}: кубик с consumes обязан объявить produces")
     if spec.is_strategy and not spec.provides:
         raise CubeError(f"{spec.id}: стратегия без provides бесполезна")
-    if not spec.is_strategy and not spec.produces:
+    if not spec.is_strategy and not spec.outputs:
         raise CubeError(f"{spec.id}: кубик стадии {spec.stage.value} обязан объявить produces")
     names = [p.name for p in spec.params]
     duplicates = sorted({n for n in names if names.count(n) > 1})

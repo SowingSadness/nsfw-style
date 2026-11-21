@@ -52,9 +52,9 @@ RULES: tuple[Rule, ...] = (
     # -- контракт и композитор: общий механизм, от него зависят все кубики --------- #
     Rule(
         paths=("qwenstyle/cube.py", "qwenstyle/ports.py", "qwenstyle/compose.py"),
-        tests=("unit/test_cube_contract.py",),
+        tests=("unit/test_cube_contract.py", "cube/test_full_chain.py"),
         tags=frozenset({"unit", "contract"}),
-        why="порты/реестр/композитор — общий контракт всех кубиков",
+        why="порты/реестр/композитор — общий контракт всех кубиков и полная цепочка",
     ),
     # -- кубики: у каждого свой точечный набор ------------------------------- #
     Rule(
@@ -89,6 +89,25 @@ RULES: tuple[Rule, ...] = (
         tags=frozenset({"contract"}),
         why="PE на llama.cpp: аргументы сервера, data-URL картинок, ошибки бюджета",
     ),
+    # -- стадии шага 6: источник, трансформер, постобработка ------------------ #
+    Rule(
+        paths=("qwenstyle/cubes/source_project.py", "qwenstyle/io.py"),
+        tests=("cube/test_source_project.py",),
+        tags=frozenset({"contract"}),
+        why="источник проекта: промт/референсы, natural-порядок, ключи md5/sha",
+    ),
+    Rule(
+        paths=("qwenstyle/cubes/transformer_qwen21.py",),
+        tags=frozenset({"contract"}),
+        why="трансформер: сверка параметров кубика с бекендом (verify)",
+    ),
+    Rule(
+        paths=("qwenstyle/cubes/post_esrgan.py", "qwenstyle/cubes/post_colorfix.py",
+               "qwenstyle/cubes/post_seedvr2.py", "qwenstyle/colorfix.py"),
+        tests=("cube/test_post.py",),
+        tags=frozenset({"contract"}),
+        why="постобработка: множитель/пропуск апскейла, цветокоррекция, целевой размер SeedVR2",
+    ),
     # -- хранилище квантованных весов ---------------------------------------- #
     Rule(
         paths=("qwenstyle/quant/store.py", "qwenstyle/quant/reader.py", "qwenstyle/quant/__init__.py",
@@ -119,8 +138,15 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         paths=("qwenstyle/presets/*.yaml", "qwenstyle/profiles.py"),
-        tests=("e2e/test_presets_vram.py", "e2e/test_profiles.py"),
-        why="пресеты и профили: бюджет VRAM, публичные имена",
+        tests=("e2e/test_presets_vram.py", "e2e/test_profiles.py",
+               "unit/test_composition_from_config.py"),
+        why="пресеты и профили: бюджет VRAM, публичные имена, проекция в композицию",
+    ),
+    Rule(
+        paths=("qwenstyle/composition.py", "qwenstyle/cmd/config.py"),
+        tests=("unit/test_composition_from_config.py",),
+        tags=frozenset({"contract"}),
+        why="проекция RunConfig -> кубики и печать `config show --cubes`",
     ),
     Rule(
         paths=("qwenstyle/cmd/*.py", "qwenstyle/cli.py"),

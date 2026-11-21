@@ -191,14 +191,14 @@ def case_ports_stage_and_strategies_agree() -> None:
         assert isinstance(spec.stage, Stage), f"{spec.id}: stage не Stage"
         unknown = (spec.consumes | spec.reads) - set(PORT_TYPES)
         assert not unknown, f"{spec.id}: неизвестные порты {sorted(unknown)}"
-        if spec.produces is not None:
-            assert spec.produces in PORT_TYPES, f"{spec.id}: неизвестный порт {spec.produces!r}"
+        unknown_out = spec.outputs - set(PORT_TYPES)
+        assert not unknown_out, f"{spec.id}: неизвестные порты выхода {sorted(unknown_out)}"
         if spec.is_strategy:
             assert spec.provides, f"{spec.id}: стратегия без provides"
-            assert spec.produces is None and not spec.consumes, (
+            assert not spec.outputs and not spec.consumes, (
                 f"{spec.id}: стратегия не должна потреблять/производить порты")
         else:
-            assert spec.produces, f"{spec.id}: не-стратегия без produces"
+            assert spec.outputs, f"{spec.id}: не-стратегия без produces"
         assert not (spec.requires & spec.provides), (
             f"{spec.id}: требует и сам даёт {sorted(spec.requires & spec.provides)}")
 

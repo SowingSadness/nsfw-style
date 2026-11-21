@@ -106,6 +106,21 @@ sort), `prompt-<model>.txt`, опциональный `project.yaml` и `out/<YY
 (CUDA + веса), `tests/texts/` (эталонные промты), `tests/_shared.py` (общие пути/CLI),
 `tests/registry.py` (карта «исходник -> тесты») и `tests/run.py` (раннер:
 `tests/run.py --tag unit|contract|cube|e2e`, `--changed <path>`, `--list`, `--map`);
+**Кубики (план `.pi/plans/cube-architecture.md`, шаги 1–6).** Пайплайн описан стадиями
+(`qwenstyle/cube.py` — контракт и реестр, `qwenstyle/compose.py` — компоновщик, `qwenstyle/cubes/*` —
+13 кубиков): `source.project` (проект -> prompt+refs) → `rewrite.pe_i2i|pe_t2i|pe_llamacpp`
+(prompt -> prompt) → `encoder.qwen3vl` (prompt+refs -> conditioning) → стратегии
+`strategy.precision.fp8` / `strategy.kv_offload` / `strategy.window_attention` →
+`transformer.qwen_image21` (conditioning -> latents, `requires={fp8,kv_offload}`) →
+`decoder.vae.qwen21` (latents -> pixels) → `post.upscale.esrgan|seedvr2`, `post.colorfix`
+(pixels -> pixels). Посмотреть дерево любого пресета без загрузки весов:
+`python -m qwenstyle config show VRAM16-4k-slide --cubes` (rc=1 и список ошибок, если композиция
+не сходится; `--json` — для UI). Проекция `RunConfig -> PipelineSpec` живёт в
+`qwenstyle/composition.py`; **пресеты пока остаются YAML-данными** (переезд `run`/`gen` на
+`compose()` — шаг 7), поэтому источник истины для прогона — `RunConfig`, а кубики показывают его
+структуру. H3 (`h3-image`, `max-h3`) кубиками ещё не выражен: `config show <h3> --cubes` даёт
+`cube_unsupported` — это ожидаемо.
+
 `.pi/skills/fusal-prompt/` — скилл по написанию промтов (адаптированная версия скилла из LoRA-репозитория, оригиналы — в `references/`).
 
 ## 2. Обязательные правила

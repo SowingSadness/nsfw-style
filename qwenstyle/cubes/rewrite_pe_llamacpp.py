@@ -207,8 +207,9 @@ CUBE: CubeSpec = register_cube(CubeSpec(
                       doc="длинная сторона референса (vision-токены префикса)"),
         ParameterSpec("cache", "cube", "bool", True, doc="кэшировать ответ по ключу инструкции"),
     ),
-    budget=ResourceBudget(weights_bf16_gib=17.55, weights_fp8_gib=5.5, disk_gib=5.5,
-                          notes="Q4_K_M GGUF: 5.5 ГиБ на диске и в VRAM (минус mmproj 0.86)"),
+    budget=ResourceBudget(weights_bf16_gib=5.5, disk_gib=5.5,
+                          notes="Q4_K_M GGUF: 5.5 ГиБ и на диске, и в VRAM (плюс mmproj 0.86); "
+                                "bf16-копии в нашей памяти нет — её держит llama-server"),
     self_test=_self_test,
     doc="PE через llama.cpp/GGUF: Q4_K_M в VRAM, fused-ядра, ответ секунды вместо минут",
 ))

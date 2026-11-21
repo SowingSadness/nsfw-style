@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Sequence
+import re
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -38,6 +39,48 @@ NOREF_SHA = "noref"
 # Известные расширения картинок: нужны, чтобы отличить реальный формат от тега в имени
 # (`out/x-s20261113`: Path(...).suffix == ".s20261113", но это НЕ расширение).
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
+
+
+def natural_key(path: str | Path) -> tuple:
+    """Естественная сортировка: `2-x` раньше `10-x`; файлы без числа — в конце.
+
+    Референсы проекта нумеруются людьми (`1-...`, `2-...`, `10-...`), и лексикографический порядок
+    поставил бы `10-` вторым — а с ним поехали бы плейсхолдеры `<imageN>` в промте.
+    """
+    path = Path(path)
+    parts = [part for part in re.split(r"(\d+)", path.stem.lower()) if part]
+    has_number = any(part.isdigit() for part in parts)
+    chunks = tuple((0, int(part)) if part.isdigit() else (1, part) for part in parts)
+    return (0 if has_number else 1, chunks, path.name.lower())
+
+
+def discover_images(folder: str | Path, *, suffixes: Sequence[str] = IMAGE_SUFFIXES,
+                    on_duplicate: Callable[[Path, Path], None] | None = None) -> list[Path]:
+    """Картинки каталога (не рекурсивно) в natural-порядке; одинаковый стем -> первый.
+
+    Один порядок для всего проекта: `refs*/` проекта (`cmd/_project.py`) и `source.project`
+    считают файлы одинаково, иначе `<image1>` в промте и conditioning разъехались бы.
+    `on_duplicate(путь, уже_взятый)` — что сделать с дубликатом стема (`a.png` + `a.jpg`);
+    по умолчанию просто берётся первый по natural sort.
+    """
+    root = Path(folder)
+    if not root.is_dir():
+        return []
+    found = sorted((p for p in root.iterdir()
+                    if p.is_file() and p.suffix.lower() in tuple(suffixes)),
+                   key=natural_key)
+    seen: dict[str, Path] = {}
+    result: list[Path] = []
+    for path in found:
+        key = path.stem.casefold()
+        known = seen.get(key)
+        if known is not None:
+            if on_duplicate is not None:
+                on_duplicate(path, known)
+            continue
+        seen[key] = path
+        result.append(path)
+    return result
 
 
 # --------------------------------------------------------------------------- #

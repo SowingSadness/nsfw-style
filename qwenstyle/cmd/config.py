@@ -135,6 +135,49 @@ def explain_params(cfg: RunConfig) -> None:
             print("  фиксировано моделью (readonly): " + ", ".join(fixed))
 
 
+def cubes_view(cfg: RunConfig, *, as_json: bool = False) -> int:
+    """Печать композиции кубиков для конфига (план `cube-architecture`, шаг 6).
+
+    Ничего не грузит: показывает, из каких стадий состоит пресет, какие стратегии он включает
+    и какие ошибки видит композитор. Код возврата: 0 — композиция чистая, 1 — есть ошибки.
+    """
+    from ..composition import check, spec_of
+
+    spec = spec_of(cfg)
+    composition = check(cfg)
+    if as_json:
+        print(json.dumps({
+            "name": spec.name,
+            "ok": composition.ok,
+            "budget_vram_gib": round(composition.budget_gib, 3),
+            "provides": sorted(composition.provides),
+            "ports_in": sorted(composition.ports_in),
+            "ports_out": sorted(composition.ports_out),
+            "cubes": [{"id": b.cube_id, "params": dict(b.params)} for b in spec.cubes],
+            "issues": [{"code": i.code, "cube": i.cube_id, "field": i.field,
+                        "text": i.text} for i in composition.issues],
+        }, ensure_ascii=False, indent=2, default=str))
+        return 0 if composition.ok else 1
+    head = "ok" if composition.ok else f"{len(composition.issues)} ошиб."
+    print(f"composition={spec.name} ({head})  бюджет VRAM {composition.budget_gib:.1f} ГиБ")
+    print(f"inputs={', '.join(sorted(composition.ports_in)) or '—'} -> "
+          f"outputs={', '.join(sorted(composition.ports_out)) or '—'}"
+          f"  provides={', '.join(sorted(composition.provides)) or '—'}")
+    for index, binding in enumerate(spec.cubes, start=1):
+        cube = next((c for c in composition.cubes if c.id == binding.cube_id), None)
+        stage = cube.stage.value if cube else "?"
+        ports = cube.summary().split(None, 2)[-1] if cube else ""
+        params = " ".join(f"{k}={_fmt(v)}" for k, v in binding.params.items())
+        print(f"  {index:2}. {binding.cube_id:24} {stage:11} {ports}")
+        if params:
+            print(f"      params: {params}")
+    if composition.issues:
+        print("ошибки композиции:")
+        for issue in composition.issues:
+            print(f"  - [{issue.code}] {issue.text}")
+    return 0 if composition.ok else 1
+
+
 def add_args(parser: argparse.ArgumentParser) -> None:
     actions = parser.add_subparsers(dest="config_action", required=True, metavar="<action>")
     show = actions.add_parser(
@@ -152,6 +195,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     show.add_argument("--explain-params", dest="explain_params", action="store_true",
                       help="таблица настраиваемых параметров бекендов (scope/name/type/default/"
                            "range/readonly/doc) вместо конфига; источник — parameters()")
+    show.add_argument("--cubes", dest="cubes", action="store_true",
+                      help="композиция кубиков пресета (стадии, стратегии, бюджет VRAM, ошибки); "
+                           "с --json — машинный формат для UI")
     show.set_defaults(_config_action="show")
 
 
@@ -163,6 +209,8 @@ def run(args: argparse.Namespace) -> int:
     from . import parse_sets
 
     cfg = RunConfig.from_profile(args.preset, **parse_sets(args.sets))
+    if getattr(args, "cubes", False):
+        return cubes_view(cfg, as_json=args.json)
     if getattr(args, "explain_params", False):
         explain_params(cfg)
         return 0
@@ -174,4 +222,4 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-__all__ = ["NAME", "HELP", "add_args", "run", "describe", "explain_params"]
+__all__ = ["NAME", "HELP", "add_args", "run", "describe", "explain_params", "cubes_view"]

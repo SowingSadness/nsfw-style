@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..config import ConfigError, RunConfig
+from ..io import discover_images
 
 #: Каталог пользовательских проектов промтов (в `.gitignore`).
 PROMPT_ROOT = "prompts"
@@ -91,14 +92,6 @@ def _txt_candidates(folder: Path) -> list[str]:
     if not folder.is_dir():
         return []
     return sorted(path.name for path in folder.glob("*.txt") if path.is_file())
-
-
-def _natural_key(path: Path) -> tuple:
-    """Естественная сортировка: `2-x` раньше `10-x`; файлы без числа — в конце."""
-    parts = [part for part in re.split(r"(\d+)", path.stem.lower()) if part]
-    has_number = any(part.isdigit() for part in parts)
-    chunks = tuple((0, int(part)) if part.isdigit() else (1, part) for part in parts)
-    return (0 if has_number else 1, chunks, path.name.lower())
 
 
 def tag_for(stem: str, project_dir: Path) -> str:
@@ -277,24 +270,14 @@ def discover_refs(folder: str | Path) -> list[Path]:
     Нерекурсивно: референсы — плоский набор проекта, и порядок в нём = порядок `<imageN>`
     в промте. Дубликат стема (`a.png` + `a.jpg`) не ошибка: берётся первый по natural sort,
     остальные печатаются одной строкой (детерминированно на любой ФС).
+
+    Сама выборка — `io.discover_images` (один порядок на весь проект: его же использует
+    кубик `source.project`).
     """
-    target = Path(folder)
-    if not target.is_dir():
-        return []
-    found = sorted((path for path in target.iterdir()
-                    if path.is_file() and path.suffix.lower() in REFS_SUFFIXES),
-                   key=_natural_key)
-    seen: dict[str, Path] = {}
-    result: list[Path] = []
-    for path in found:
-        key = path.stem.casefold()
-        known = seen.get(key)
-        if known is not None:
-            print(f"[gen] refs: дубликат {path.name} — взят {known.name}", flush=True)
-            continue
-        seen[key] = path
-        result.append(path)
-    return result
+    return discover_images(
+        folder, suffixes=REFS_SUFFIXES,
+        on_duplicate=lambda path, kept: print(f"[gen] refs: дубликат {path.name} — взят {kept.name}",
+                                             flush=True))
 
 
 def placeholder_map(paths: list[Path]) -> list[tuple[Path, int]]:

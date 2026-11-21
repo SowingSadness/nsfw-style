@@ -115,6 +115,10 @@ def _check_value(spec: ParameterSpec, value: Any, cube_id: str) -> list[Issue]:
                             f"параметр зафиксирован моделью (значение {spec.default!r})",
                             cube_id, spec.name, f"получено {value!r}"))
         return issues
+    if value is None and spec.default is None:
+        # «не задан» — законное значение для параметра с дефолтом `None`
+        # (например `target_height`: апскейл включается только явной целью).
+        return issues
     try:
         if spec.type == "int":
             if isinstance(value, bool) or not isinstance(value, int):
@@ -176,6 +180,7 @@ def compose(spec: PipelineSpec, *, machine: Mapping[str, Any] | None = None) -> 
 
     available: set[str] = set(spec.inputs)
     consumed: set[str] = set()
+    read_ports: set[str] = set()
     provides: set[str] = set()
     cube_specs: list[CubeSpec] = []
     bindings: list[tuple[str, dict[str, Any]]] = []
@@ -206,14 +211,15 @@ def compose(spec: PipelineSpec, *, machine: Mapping[str, Any] | None = None) -> 
                                 f"доступны: {', '.join(sorted(available)) or '—'}"))
         # кубик-преобразователь (`pixels -> pixels`, `prompt -> prompt`) законно переиспользует
         # свой порт: дубликатом считается только «производство» порта, который он не потребляет.
-        in_place = cube.produces is not None and cube.produces in cube.consumes
-        if cube.produces and not in_place and cube.produces in produced:
-            issues.append(Issue("port_duplicate", f"порт {cube.produces!r} уже произведён", cube.id))
+        outputs = cube.outputs
+        fresh = outputs - cube.consumes
+        for port in sorted(fresh & produced):
+            issues.append(Issue("port_duplicate", f"порт {port!r} уже произведён", cube.id))
         available -= set(cube.consumes)
         consumed |= set(cube.consumes)
-        if cube.produces:
-            available.add(cube.produces)
-            produced.add(cube.produces)
+        read_ports |= set(cube.reads)
+        available |= outputs
+        produced |= fresh
 
         # стратегии
         unmet = sorted(cube.requires - provides)
@@ -235,12 +241,23 @@ def compose(spec: PipelineSpec, *, machine: Mapping[str, Any] | None = None) -> 
     # Неиспользованным считается только **произведённый** порт, который никто не забрал:
     # «неиспользованный референс» на входе — норма (энкодер читает его через `reads`), а вот
     # латенты без декодера или conditioning без трансформера — ошибка композиции.
-    leftover = sorted(produced - consumed - {"pixels"})
+    # `reads` считается использованием: `encoder.qwen3vl` именно читает `refs` (не забирает),
+    # и `source.project` производит его ради энкодера.
+    leftover = sorted(produced - consumed - read_ports - {"pixels"})
     if leftover:
         issues.append(Issue("ports_unused", f"на выходе остались неиспользованные порты {leftover}",
                             hint="добавьте кубик-потребитель (например decoder для 'latents')"))
 
-    budget = sum(c.budget.weights_bf16_gib for c in cube_specs)
+    # Бюджет VRAM: суммарные веса в **фактической** точности. Включённая стратегия `fp8` берёт
+    # `weights_fp8_gib` (упаковка тех же весов), а энкодер стримится по модулям и объявляет
+    # `encoder_gib` (RAM) — его веса в VRAM не живут, поэтому в сумму VRAM не идут.
+    use_fp8 = "fp8" in provides
+    budget = 0.0
+    for cube in cube_specs:
+        if cube.stage is Stage.ENCODER or cube.is_strategy:
+            continue                        # энкодер в RAM/стримингом, стратегия ничего не держит
+        packed = cube.budget.weights_fp8_gib
+        budget += packed if (use_fp8 and packed is not None) else cube.budget.weights_bf16_gib
     if machine:
         vram = machine.get("vram_gib")
         if isinstance(vram, (int, float)) and budget > float(vram):
@@ -248,7 +265,8 @@ def compose(spec: PipelineSpec, *, machine: Mapping[str, Any] | None = None) -> 
                                 hint="смените кубик или стратегию (fp8/offload)"))
 
     return Composition(spec=spec, cubes=tuple(cube_specs), issues=tuple(issues),
-                       ports_in=frozenset(spec.inputs), ports_out=frozenset(available),
+                       ports_in=frozenset(spec.inputs),
+                       ports_out=frozenset(available) - read_ports,
                        bindings=tuple(bindings), provides=frozenset(provides), budget_gib=budget)
 
 
