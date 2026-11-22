@@ -83,12 +83,21 @@ class ParameterSpec:
     maximum: float | None = None
     readonly: bool = False
     doc: str = ""
+    #: id кубика для параметров `scope="cube"` (проставляется `cube.register_cube`).
+    cube_id: str = ""
 
     @property
     def path(self) -> str:
-        """Путь для `--set`: `generation.sampler_kwargs.offload_blocks`, `upscale.tile`, …"""
+        """Путь для `--set`: `generation.sampler_kwargs.offload_blocks`, `upscale.tile`, ….
+
+        Для `scope="cube"` путь начинается с **id кубика** (`decoder.vae.qwen21.tile_px`):
+        кубики разных стадий объявляют одинаковые имена (`repo`, `revision`), и без префикса
+        `--set` был бы неоднозначным. Проставляется при регистрации (`cube.register_cube`).
+        """
         if self.scope == "sampler":
             return f"generation.sampler_kwargs.{self.name}"
+        if self.scope == "cube" and self.cube_id:
+            return f"{self.cube_id}.{self.name}"
         return f"{self.scope}.{self.name}"
 
     def range_text(self) -> str:

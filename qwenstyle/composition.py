@@ -187,3 +187,123 @@ def check(cfg: Any, *, machine: dict[str, Any] | None = None) -> Composition:
                        issues=(Issue("cube_unsupported", reason,
                                      hint="PRESETS остаются источником истины для прогона до шага 7"),))
     return compose(spec_of(cfg), machine=machine)
+
+
+#: Допуск сравнения пропорций при обратной проекции (W/H -> `aspect` из `RunConfig`).
+_RATIO_TOLERANCE = 0.01
+
+
+def config_mapping_of(pipeline: PipelineSpec, run: "Any" = None) -> dict[str, Any]:
+    """Обратная проекция: композиция -> словарь для `RunConfig.from_mapping` (до `cutover`).
+
+    Нужна переходному режиму: файл воркфлоу — единственный источник, а рантайм ждёт привычную
+    форму `RunConfig`. Точность важна, иначе `gen --workflow` поедет на других значениях:
+
+    * `encoder.qwen3vl` -> `encoder.*`; `transformer.qwen_image21` -> `generation.*`;
+    * стратегии -> `generation.precision`/`kv_cache`/`sampler_kwargs.{offload_*, window_attn_*,
+      ref_px, vae_tile_px}` (словарь свободных ключей бекенда);
+    * `source.frame` -> `size_px`/`aspect`/`sampler_kwargs.ref_px`. Явные `width`+`height`
+      выражаются только через пропорцию из `ASPECT_RATIOS` (16:9, 4:3, 1:1, 2:3); иная пропорция
+      честно отвергается до `cutover` (после него `RunConfig` не нужен вовсе);
+    * `post.upscale.*`/`post.colorfix` -> `upscale.*`; `run` -> `seed`/`out`/`logs`/`cache_*`.
+    """
+    from .cube import get_cube
+
+    data: dict[str, Any] = {}
+    sampler: dict[str, Any] = {}
+    generation: dict[str, Any] = {"sampler_kwargs": sampler}
+    encoder: dict[str, Any] = {}
+    upscale: dict[str, Any] = {}
+
+    for binding in pipeline.cubes:
+        params = dict(binding.params)
+        cube_id = binding.cube_id
+        if cube_id == "source.frame":
+            width = int(params.get("width") or 0)
+            height = int(params.get("height") or 0)
+            if params.get("ref_crop_side"):
+                sampler["ref_px"] = int(params["ref_crop_side"])
+            if width and height:
+                ratio = width / max(1, height)
+                aspect = next((key for key, value in ASPECT_RATIOS.items()
+                               if abs(value - ratio) / value <= _RATIO_TOLERANCE), None)
+                if aspect is None:
+                    raise ValueError(
+                        f"source.frame: {width}x{height} не выражается пропорцией из "
+                        f"{sorted(ASPECT_RATIOS)} — до плана cutover используйте "
+                        f"`width: 0` (авто по референсу)")
+                data["aspect"] = aspect
+                data["size_px"] = height
+            elif height:
+                data["size_px"] = height                  # width=0: как прежний --size
+            elif width:
+                data["size_px"] = width                   # вырожденный случай: квадрат
+        elif cube_id == "encoder.qwen3vl":
+            encoder.update(params)
+        elif cube_id == "strategy.precision.fp8":
+            generation["precision"] = "fp8"
+            generation["precision_cache"] = params.get("cache_dir") or "cache/models/fp8_transformer"
+        elif cube_id == "strategy.kv_offload":
+            generation["kv_cache"] = params.get("mode") or "auto-offload-ref2"
+        elif cube_id == "strategy.window_attention":
+            sampler["window_attn_px"] = int(params.get("window_attn_px") or 0)
+            sampler["window_attn_margin_px"] = int(params.get("window_attn_margin_px") or 0)
+        elif cube_id == "transformer.qwen_image21":
+            generation["backend"] = params.get("backend") or "qwen_image21"
+            generation["repo"] = params.get("repo")
+            generation["revision"] = params.get("revision") or None
+            generation["steps"] = params.get("steps")
+            generation["guidance"] = params.get("guidance")
+            generation["offload"] = params.get("offload")
+            sampler["offload_blocks"] = int(params.get("offload_blocks") or 1)
+            sampler["offload_stream"] = bool(params.get("offload_stream", True))
+            if params.get("lora_scale"):
+                generation["lora"] = {"repo": params.get("lora_repo") or "",
+                                      "filename": params.get("lora_file") or "",
+                                      "scale": float(params["lora_scale"])}
+            else:
+                generation["lora"] = None
+        elif cube_id == "decoder.vae.qwen21":
+            sampler["vae_tile_px"] = int(params.get("tile_px", 512))
+        elif cube_id == "post.upscale.esrgan":
+            upscale.update({"backend": "esrgan", "factor": params.get("factor", 0.0),
+                            "target_height": params.get("target_height"),
+                            "tile": params.get("tile", 256), "pad": params.get("pad", 32)})
+            if params.get("weights"):
+                upscale["weights"] = params["weights"]
+        elif cube_id == "post.upscale.seedvr2":
+            upscale.update({"backend": "seedvr2", "factor": params.get("factor", 0.0),
+                            "target_height": params.get("height") or None})
+        elif cube_id == "post.colorfix":
+            upscale.update({"color_fix": params.get("mode") or "none",
+                            "color_strength": params.get("strength", 1.0),
+                            "color_sigma": params.get("sigma", 12.0)})
+        # source.txtFileImage / rewrite.* / decoder.postprocess.image рантайму пока не видны:
+        # промт и референсы приходят из CLI-пути, PE ещё не подключён к прогону
+
+    if generation.get("precision") is None:
+        generation["precision"] = "bf16"
+    if encoder:
+        data["encoder"] = encoder
+    data["generation"] = generation
+    if upscale:
+        # `upscale: null` (апскейл выключен целиком) — когда кубика апскейла нет вообще
+        data["upscale"] = upscale if upscale.get("backend") else None
+    else:
+        data["upscale"] = None
+    if run is not None:
+        seeds = tuple(int(seed) for seed in getattr(run, "seeds", ()) or ())
+        if seeds:
+            data["seed"] = seeds[0]
+        out = getattr(run, "out", "")
+        if out:
+            data["out"] = out
+        data["logs"] = bool(getattr(run, "logs", True))
+        cache_dir = getattr(run, "cache_dir", "")
+        if cache_dir:
+            data["cache_dir"] = cache_dir
+        policy = getattr(run, "cache_supersede", "")
+        if policy:
+            data["cache_supersede"] = policy
+    data["preset"] = pipeline.name
+    return data

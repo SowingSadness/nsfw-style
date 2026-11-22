@@ -161,12 +161,30 @@ def _validate(spec: CubeSpec) -> None:
 
 
 def register_cube(spec: CubeSpec) -> CubeSpec:
-    """Зарегистрировать кубик. Повторная регистрация того же id — ошибка (импорт дважды?)."""
+    """Зарегистрировать кубик. Повторная регистрация того же id — ошибка (импорт дважды?).
+
+    Здесь же параметры со `scope="cube"` получают **полный путь с id кубика**
+    (`decoder.vae.qwen21.tile_px`): без этого `--set cube.repo=…` был бы неоднозначным — `repo`
+    объявляют энкодер, трансформер и оба PE-кубика. Путь — часть данных кубика (UI берёт его
+    оттуда же), поэтому переписывается один раз при регистрации.
+    """
     _validate(spec)
     if spec.id in _REGISTRY:
         raise CubeError(f"кубик {spec.id!r} уже зарегистрирован")
+    spec = _qualify_paths(spec)
     _REGISTRY[spec.id] = spec
     return spec
+
+
+def _qualify_paths(spec: CubeSpec) -> CubeSpec:
+    """Проставить `--set`-пути параметрам `scope="cube"` (id кубика + имя параметра)."""
+    from dataclasses import replace
+
+    if not any(param.scope == "cube" and not param.cube_id for param in spec.params):
+        return spec
+    return replace(spec, params=tuple(
+        replace(param, cube_id=spec.id) if param.scope == "cube" and not param.cube_id else param
+        for param in spec.params))
 
 
 def get_cube(cube_id: str) -> CubeSpec:
