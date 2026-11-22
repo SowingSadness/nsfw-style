@@ -160,7 +160,13 @@ RULES: tuple[Rule, ...] = (
         paths=("qwenstyle/cmd/workflow.py",),
         tests=("unit/test_workflow_cli.py",),
         tags=frozenset({"contract"}),
-        why="CLI воркфлоу: check/show/new без весов",
+        why="CLI воркфлоу: check/show/new/move без весов",
+    ),
+    Rule(
+        paths=("qwenstyle/templates/*/*.yaml", "qwenstyle/profiles.py"),
+        tests=("unit/test_templates.py",),
+        tags=frozenset({"contract"}),
+        why="шаблоны без наследования: инварианты тарифа и совпадение значений с пресетами",
     ),
     Rule(
         paths=("qwenstyle/cmd/cubes.py", "qwenstyle/cmd/compose.py"),

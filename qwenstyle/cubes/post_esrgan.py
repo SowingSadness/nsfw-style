@@ -25,7 +25,10 @@ from ..backends.base import ParameterSpec, ResourceBudget
 from ..cube import CubeContext, CubeSpec, Stage, register_cube
 from ..ports import Pixels
 
-__all__ = ["CUBE", "EsrganParams", "plan_factor", "resolve_factor", "upscale"]
+__all__ = ["CUBE", "DEFAULT_WEIGHTS", "EsrganParams", "plan_factor", "resolve_factor", "upscale"]
+
+#: Путь весов по умолчанию — тот же, что в пресетах (`upscale.weights`).
+DEFAULT_WEIGHTS = "cache/models/weights/RealESRGAN_x4plus_anime_6B.pth"
 
 #: Признак «апскейл не нужен»: фактор ниже этого считается ~1 и кадр возвращается как есть.
 MIN_FACTOR = 1.01
@@ -111,9 +114,9 @@ CUBE: CubeSpec = register_cube(CubeSpec(
     consumes=frozenset({"pixels"}),
     produces="pixels",
     params=(
-        ParameterSpec("weights", "cube", "str", "",
-                      doc="путь к .pth (пусто = cache/models/weights/RealESRGAN_x4plus_anime_6B.pth, "
-                          "скачивается автоматически)"),
+        ParameterSpec("weights", "cube", "str", DEFAULT_WEIGHTS,
+                      doc="путь к .pth (по умолчанию cache/models/weights/"
+                          "RealESRGAN_x4plus_anime_6B.pth, скачивается автоматически)"),
         ParameterSpec("factor", "upscale", "float", 0.0, minimum=0.0, maximum=4.0,
                       doc="множитель; 0 = выключено; target_height главнее factor"),
         ParameterSpec("target_height", "upscale", "int", None, minimum=0,

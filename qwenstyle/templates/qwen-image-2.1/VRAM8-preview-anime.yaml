@@ -1,0 +1,61 @@
+# Шаблон «VRAM8-preview-anime»: развёрнутая композиция кубиков (без extends).
+# Собран из пресета VRAM8-preview-anime; значения 1:1 (проекция RunConfig -> PipelineSpec).
+# Шаблон копируют и правят: `python -m qwenstyle workflow new --from VRAM8-preview-anime --name my-project`.
+version: 1
+name: VRAM8-preview-anime
+cubes:
+  - id: source.frame
+    params:
+      ref_crop_side: 0
+      height: 480
+      width: 0
+  - id: source.txtFileImage
+  - id: encoder.qwen3vl
+    params:
+      name: heretic
+      cache_tag: heretic
+      dtype: bfloat16
+      device: cpu
+      repo: DreamFast/Qwen3-VL-8B-Heretic-1.3.0
+      revision: 28dc0129b4c7c16304bc2ed3697c9437ae8ac2f3
+      local_dir: cache/models/weights/heretic-te
+      stream: true
+      prefetch: 4
+      pin_memory: true
+      lookahead: 1
+  - id: strategy.precision.fp8
+    params:
+      cache_dir: cache/models/fp8_transformer
+  - id: strategy.kv_offload
+    params:
+      mode: auto-offload-ref2
+  - id: transformer.qwen_image21
+    params:
+      backend: qwen_image21
+      repo: Qwen/Qwen-Image-2.1
+      steps: 8
+      guidance: 1.0
+      transformer_repo: Qwen/Qwen-Image-2.1
+      transformer_subfolder: transformer
+      lora_repo: MicksHF/Qwen-Image-2.1-Anime-Fusal
+      lora_file: fusal-qwen-image-2.1-v2-exact-r80.safetensors
+      lora_scale: 0.7
+      lora_strip_alpha: false
+      offload: group
+      offload_blocks: 1
+      offload_stream: true
+  - id: decoder.vae.qwen21
+    params:
+      tile_px: 512
+  - id: decoder.postprocess.image
+    params:
+      output_type: pil
+  - id: post.colorfix
+    params:
+      mode: wavelet
+      sigma: 12.0
+      strength: 0.75
+run:
+  seeds: []
+  out: out
+  logs: true

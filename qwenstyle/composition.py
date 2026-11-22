@@ -227,7 +227,7 @@ def config_mapping_of(pipeline: PipelineSpec, run: "Any" = None) -> dict[str, An
         if cube_id == "source.frame":
             width = int(params.get("width") or 0)
             height = int(params.get("height") or 0)
-            if params.get("ref_crop_side"):
+            if int(params.get("ref_crop_side") or 0) > 0:
                 sampler["ref_px"] = int(params["ref_crop_side"])
             if width and height:
                 ratio = width / max(1, height)
@@ -252,8 +252,12 @@ def config_mapping_of(pipeline: PipelineSpec, run: "Any" = None) -> dict[str, An
         elif cube_id == "strategy.kv_offload":
             generation["kv_cache"] = params.get("mode") or "auto-offload-ref2"
         elif cube_id == "strategy.window_attention":
-            sampler["window_attn_px"] = int(params.get("window_attn_px") or 0)
-            sampler["window_attn_margin_px"] = int(params.get("window_attn_margin_px") or 0)
+            window_px = int(params.get("window_attn_px") or 0)
+            margin_px = int(params.get("window_attn_margin_px") or 0)
+            if window_px:
+                sampler["window_attn_px"] = window_px
+            if margin_px:
+                sampler["window_attn_margin_px"] = margin_px
         elif cube_id == "transformer.qwen_image21":
             generation["backend"] = params.get("backend") or "qwen_image21"
             generation["repo"] = params.get("repo")
@@ -261,8 +265,13 @@ def config_mapping_of(pipeline: PipelineSpec, run: "Any" = None) -> dict[str, An
             generation["steps"] = params.get("steps")
             generation["guidance"] = params.get("guidance")
             generation["offload"] = params.get("offload")
-            sampler["offload_blocks"] = int(params.get("offload_blocks") or 1)
-            sampler["offload_stream"] = bool(params.get("offload_stream", True))
+            # свободные ключи бекенда пишем только если отличаются от умолчаний кубика:
+            # иначе обратная проекция тащит в конфиг `offload_blocks: 1`, `vae_tile_px: 512` и
+            # прочий «шум», которого в пресете не было (сравнение со снимком это ловит)
+            if int(params.get("offload_blocks") or 1) != 1:
+                sampler["offload_blocks"] = int(params["offload_blocks"])
+            if not bool(params.get("offload_stream", True)):
+                sampler["offload_stream"] = False
             if params.get("transformer_repo"):
                 generation["transformer"] = (str(params["transformer_repo"]),
                                              str(params.get("transformer_subfolder")
@@ -275,7 +284,8 @@ def config_mapping_of(pipeline: PipelineSpec, run: "Any" = None) -> dict[str, An
             else:
                 generation["lora"] = None
         elif cube_id == "decoder.vae.qwen21":
-            sampler["vae_tile_px"] = int(params.get("tile_px", 512))
+            if int(params.get("tile_px", 512)) != 512:
+                sampler["vae_tile_px"] = int(params["tile_px"])
         elif cube_id == "post.upscale.esrgan":
             upscale.update({"backend": "esrgan", "factor": params.get("factor", 0.0),
                             "target_height": params.get("target_height"),

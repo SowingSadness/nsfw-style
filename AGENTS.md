@@ -106,6 +106,19 @@ sort), `prompt-<model>.txt`, опциональный `project.yaml` и `out/<YY
 (CUDA + веса), `tests/texts/` (эталонные промты), `tests/_shared.py` (общие пути/CLI),
 `tests/registry.py` (карта «исходник -> тесты») и `tests/run.py` (раннер:
 `tests/run.py --tag unit|contract|cube|e2e`, `--changed <path>`, `--list`, `--map`);
+**Workflow-файлы (план `.pi/plans/workflow-layout.md`).** Пайплайн описывается файлом
+`workflow/<проект>/workflow.yaml` — самодостаточным (`version: 1` + `cubes:` + `run:`), **без
+`extends`/`template`**: шаблоны (`qwenstyle/templates/<модель>/<имя>.yaml`) копируют и правят
+(`python -m qwenstyle workflow new --from VRAM16-preview --name my-project`). Команды:
+`workflow check|show|new|move` (миграция `prompts/` → `workflow/`, по умолчанию только план),
+`gen --workflow <файл>` (переходный режим: композиция переводится в `RunConfig`, прогон тот же —
+кадр побайтно совпадает с `run --config`). Геометрия кадра — кубик `source.frame`
+(`width`/`height` кратны 32, `0` = авто по референсу; `ref_crop_side` — сторона сетки референсов),
+входы — `source.txtFileImage` (`prompt` + явные `Image1…Image10`). Устаревшие `--set`-написания
+(`generation.steps`, `generation.sampler_kwargs.offload_blocks`, `encoder.device`, `upscale.tile`)
+работают через таблицу `qwenstyle/preset_paths.py`. Отчёт: `out/bench/cutover.md` появится на шаге
+`cutover`.
+
 **Кубики (план `.pi/plans/cube-architecture.md`, шаги 1–6).** Пайплайн описан стадиями
 (`qwenstyle/cube.py` — контракт и реестр, `qwenstyle/compose.py` — компоновщик, `qwenstyle/cubes/*` —
 15 кубиков): `source.frame` (width/height/ref_crop_side → порт `frame`) и `source.txtFileImage`

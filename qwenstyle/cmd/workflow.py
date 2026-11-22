@@ -170,6 +170,137 @@ def _yaml_scalar(value: object) -> str:
     return text
 
 
+def migrate(src: str | None = None, dst: str | None = None, *, apply: bool = False) -> int:
+    """`prompts/` -> `workflow/`: переименовать каталоги и сконвертировать YAML.
+
+    План по умолчанию (`apply=False`): печатается, что будет переименовано и какие `project.yaml`
+    станут `workflow.yaml`. При `--apply`:
+
+    * каталог проектов переименовывается (`prompts` -> `workflow`) одной операцией;
+    * каждый `project.yaml` превращается в `workflow.yaml` (композиция кубиков + `run`), остальные
+      YAML вариантов — тоже (`nita-tokyo.yaml` -> такой же самодостаточный файл);
+    * `out/` и `cache/` внутри проектов не трогаются, `references`-каталоги остаются на месте;
+    * запись атомарная (`*.tmp` + `os.replace`), старый YAML остаётся рядом как `.yaml.bak`.
+
+    Данные пользователя (`prompts/` в `.gitignore`) — поэтому функция ничего не удаляет молча и
+    всегда печатает итог: переименовано / сконвертировано / пропущено.
+    """
+    import shutil
+
+    from ..composition import spec_of
+    from ..config import ConfigError, RunConfig
+
+    root = Path(src) if src else Path("prompts")
+    target = Path(dst) if dst else Path("workflow")
+    if not root.is_dir():
+        print(f"[workflow] нет каталога {root.as_posix()}", file=sys.stderr, flush=True)
+        return 2
+    projects = sorted(path for path in root.iterdir() if path.is_dir())
+    yamls = sorted(root.rglob("*.yaml"))
+    print(f"[workflow] перенос {root.as_posix()} -> {target.as_posix()}")
+    print(f"  проектов: {len(projects)}; yaml-файлов: {len(yamls)}")
+    for path in yamls:
+        print(f"  yaml: {path.relative_to(root).as_posix()}")
+    if not apply:
+        print("  (план; для выполнения — --apply)")
+        return 0
+    if target.exists():
+        print(f"[workflow] {target.as_posix()} уже существует — миграция не делается",
+              file=sys.stderr, flush=True)
+        return 2
+    converted = skipped = 0
+    shutil.move(str(root), str(target))
+    for path in sorted(target.rglob("*.yaml")):
+        text = path.read_text(encoding="utf-8")
+        if "version:" in text and "cubes:" in text:
+            skipped += 1
+            continue
+        try:
+            converted_data = _convert_yaml(path)
+        except (ConfigError, ValueError, OSError) as exc:
+            print(f"  пропущен {path.as_posix()}: {exc}", flush=True)
+            skipped += 1
+            continue
+        new_path = path.with_name("workflow.yaml" if path.name == "project.yaml" else path.name)
+        temporary = new_path.with_suffix(".yaml.tmp")
+        temporary.write_text(converted_data, encoding="utf-8")
+        temporary.replace(new_path)
+        if new_path != path:
+            path.rename(path.with_suffix(".yaml.bak"))
+        converted += 1
+        print(f"  сконвертирован {new_path.as_posix()}", flush=True)
+    print(f"[workflow] готово: переименовано каталогов {len(projects)}, "
+          f"сконвертировано {converted}, пропущено {skipped}")
+    return 0
+
+
+def _convert_yaml(path: Path) -> str:
+    """`project.yaml` (RunConfig) -> текст файла воркфлоу."""
+    import yaml
+
+    from ..composition import spec_of
+    from ..config import RunConfig
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError("ожидался словарь")
+    preset = data.get("preset")
+    if not preset:
+        raise ValueError("в файле нет `preset` — нечего разворачивать в кубики")
+    overrides = {key: value for key, value in data.items()
+                 if key not in ("preset", "prompt", "refs", "out", "seeds", "count")}
+    # частичный `generation.lora` (например только `scale: 0.6`) — это правка адаптера пресета,
+    # а не новое определение: дополняем repo/filename из пресета, иначе LoraConfig не собрать
+    base = RunConfig.from_profile(str(preset))
+    generation = dict(overrides.get("generation") or {})
+    lora = generation.get("lora")
+    if isinstance(lora, dict) and base.generation.lora is not None:
+        merged_lora = {"repo": base.generation.lora.repo,
+                       "filename": base.generation.lora.filename,
+                       "scale": base.generation.lora.scale,
+                       "strip_alpha": base.generation.lora.strip_alpha}
+        merged_lora.update({key: value for key, value in lora.items() if value is not None})
+        generation["lora"] = merged_lora
+        overrides["generation"] = generation
+    cfg = base.merged(**overrides)
+    spec = spec_of(cfg, name=path.stem)
+    lines = [f"# Воркфлоу «{path.stem}»: сконвертирован из {path.name} (пресет {preset}).",
+             "# Файл самодостаточен: правится здесь, ссылок на пресеты/шаблоны нет.",
+             "version: 1",
+             f"name: {path.stem}",
+             "cubes:"]
+    # референсы: прежний проект брал их из каталога (`refs/` или `refs:` в yaml), новый файл
+    # обязан перечислить их явно — иначе `gen --workflow` пойдёт без референсов
+    from ..io import discover_images
+
+    refs_name = str(data.get("refs") or "refs")
+    refs_dir = path.parent / refs_name
+    refs = discover_images(refs_dir, on_duplicate=lambda dup, kept: print(
+        f"  refs: дубликат {dup.name} — взят {kept.name}", flush=True))
+    for binding in spec.cubes:
+        filled = {key: value for key, value in binding.params.items() if value not in ("", None)}
+        if binding.cube_id == "source.txtFileImage":
+            filled["prompt"] = str(data.get("prompt") or "")
+            for index, image in enumerate(refs[:10], start=1):
+                filled[f"Image{index}"] = image.relative_to(path.parent).as_posix()
+        lines.append(f"  - id: {binding.cube_id}")
+        if filled:
+            lines.append("    params:")
+            for key, value in filled.items():
+                lines.append(f"      {key}: {_yaml_scalar(value)}")
+    raw_seeds = data.get("seeds")
+    if raw_seeds in (None, ""):
+        seeds: list[int] = []
+    elif isinstance(raw_seeds, (list, tuple)):
+        seeds = [int(item) for item in raw_seeds]
+    else:
+        seeds = [int(part) for part in str(raw_seeds).replace(" ", "").split(",") if part]
+    lines += ["run:", f"  seeds: {seeds}", f"  out: {data.get('out') or 'out'}"]
+    if data.get("count"):
+        lines.append(f"  count: {int(data['count'])}")
+    return "\n".join(lines) + "\n"
+
+
 def add_args(parser: argparse.ArgumentParser) -> None:
     actions = parser.add_subparsers(dest="workflow_action", required=True, metavar="<action>")
 
@@ -192,6 +323,16 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                      help="каталог (по умолчанию workflow/<name>); файл — DIR/workflow.yaml")
     new.add_argument("--force", action="store_true", help="перезаписать существующий файл")
 
+    move = actions.add_parser("move", help="перенести prompts/ -> workflow/ (миграция)",
+                              description="Переименование каталога и конвертация project.yaml в "
+                                          "workflow.yaml; по умолчанию только план (--dry-run).")
+    move.add_argument("--dir", default=None, metavar="DIR",
+                      help="что переносить (по умолчанию prompts); удобно для проверки на копии")
+    move.add_argument("--to", default=None, metavar="DIR",
+                      help="куда (по умолчанию workflow рядом с исходным каталогом)")
+    move.add_argument("--apply", action="store_true",
+                      help="выполнить перенос (без флага — только план)")
+
 
 def run(args: argparse.Namespace) -> int:
     action = args.workflow_action
@@ -202,6 +343,8 @@ def run(args: argparse.Namespace) -> int:
     if action == "new":
         return new_file(source=args.source, name=args.name, out_dir=args.dir,
                         force=bool(args.force))
+    if action == "move":
+        return migrate(args.dir, args.to, apply=bool(args.apply))
     print(f"[workflow] неизвестное действие {action!r}", file=sys.stderr, flush=True)
     return 2
 

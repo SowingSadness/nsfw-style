@@ -53,6 +53,8 @@ class Profile:
     name: str                 # VRAM8 | VRAM12 | VRAM16
     hardware: str             # "8 GB VRAM / 16 GB RAM"
     repos: tuple[ProfileRepo, ...]
+    #: Публичные **шаблоны** этой машины (`qwenstyle/templates/<модель>/<имя>.yaml`); имена те же,
+    #: что у пресетов, поэтому `gen --preset VRAM16-release` продолжает работать.
     presets: tuple[str, ...]
     disk_gib: float           # полный след на диске: загрузка + fp8-кэши + апскейлер
     #: Высота кадра, которую профиль даёт **из коробки**: у `-release` она либо native
@@ -196,6 +198,15 @@ _PROFILE_KEYS: dict[str, Profile] = {name.lower(): item for name, item in PROFIL
 def names() -> tuple[str, ...]:
     """Имена профилей в порядке возрастания железа (`VRAM8`, `VRAM12`, `VRAM16`)."""
     return PROFILE_ORDER
+
+
+def templates(name: str) -> tuple[str, ...]:
+    """Имена шаблонов профиля (файлы `qwenstyle/templates/<модель>/<имя>.yaml`).
+
+    Отдельная функция, а не поле: имя `presets` осталось историческим (на него ссылаются
+    документация, тесты профилей и `--preset`), но данные с шага 4 живут в `templates/`.
+    """
+    return profile(name).presets
 
 
 def profile(name: str) -> Profile:

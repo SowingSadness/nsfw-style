@@ -213,7 +213,9 @@ def case_config_mapping_roundtrip() -> None:
     sampler = back.generation.sampler_kwargs
     assert sampler.get("window_attn_px") == 1088, sampler
     assert sampler.get("ref_px") == 768, sampler
-    assert sampler.get("vae_tile_px") == 512, sampler
+    # ключи, совпадающие с умолчаниями кубиков, в обратную проекцию не попадают (шум)
+    assert "vae_tile_px" not in sampler, sampler
+    assert back.generation.sampler_kwargs.get("offload_blocks") is None, sampler
 
 
 def case_load_and_templates() -> None:
