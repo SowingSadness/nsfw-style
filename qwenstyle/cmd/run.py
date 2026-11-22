@@ -44,7 +44,7 @@
 Новое (не было в `run_style.py`):
 
     --config PRESET|PATH       -> пресет `qwenstyle/presets/*.yaml` (base/turbo/VRAM8-*/VRAM12-*/…)
-    --set KEY=VALUE            -> точечный параметр RunConfig (повторяемый)
+    --set KEY=VALUE            -> параметр кубика, напр. transformer.qwen_image21.steps=8
     --dry-run                  -> печать плана (crop, ключ кэша, нужен ли энкодер, шаги, фактор)
                                   без загрузки весов; exit 0
     --no-logs                  -> не писать <кадр>.log (`RunConfig.logs=False`; meta остаётся)
@@ -449,7 +449,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                         help="профиль генерации: base (по умолчанию) = R80/25 шагов; turbo = "
                              "Turbo-трансформер (8 шагов, тот же text-encoder и VAE) — только явно")
     source.add_argument("--set", dest="sets", action="append", default=[], metavar="KEY=VALUE",
-                        help="точечный параметр RunConfig, например generation.steps=8 (повторяемый)")
+                        help="параметр кубика его путём, например "
+                             "transformer.qwen_image21.steps=8 или encoder.qwen3vl.device=cpu "
+                             "(повторяемый; список путей — `cubes show <id>`)")
     source.add_argument("--preview", action="store_true",
                         help="быстрый профиль: 640p и 8 шагов")
     source.add_argument("--steps", type=int, default=None, metavar="N",

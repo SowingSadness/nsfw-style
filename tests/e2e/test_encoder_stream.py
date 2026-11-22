@@ -39,7 +39,7 @@
     `stream` для `base` теперь действует (бекенд подменяет `pipe.text_encoder`), а умолчание
     `device=auto` -> cuda ещё и включает конвейер (`stream=True`, `prefetch=4`); заодно pin сборки
     конвейера (`encoder_pin_memory`) больше не зависит от `offload=group` — включён по умолчанию
-    и выключается только `--set encoder.pin_memory=0`.
+    и выключается только `--set encoder.qwen3vl.pin_memory=0`.
 
 Билдер мини-модели переиспользуется из `tests/test_streaming.py` (импортом, не копией). Временные
 каталоги — только в системном temp; `sys.dont_write_bytecode` — чтобы в пакете не осталось
@@ -100,7 +100,7 @@ def case_config_and_cache_key(tmp: Path) -> None:
         streamed = _pinned_base().merged(**{"encoder.device": "cpu",
                                                              "encoder.stream": "true"})
     if streamed.encoder.stream is not True:
-        raise AssertionError(f"--set encoder.stream=true -> {streamed.encoder.stream!r}, "
+        raise AssertionError(f"--set encoder.qwen3vl.stream=true -> {streamed.encoder.stream!r}, "
                              f"ожидалось True")
     noise = buf.getvalue()
     if "[te] streaming:" in noise:
@@ -111,7 +111,7 @@ def case_config_and_cache_key(tmp: Path) -> None:
     alone = _pinned_base().merged(**{"encoder.device": "cpu",
                                                     "encoder.stream": "false"})
     if alone.encoder.stream is not False:
-        raise AssertionError(f"--set encoder.stream=false -> {alone.encoder.stream!r}")
+        raise AssertionError(f"--set encoder.qwen3vl.stream=false -> {alone.encoder.stream!r}")
 
     key_plain = plain.embeds_key(CROP, MD5, SHA)
     key_stream = streamed.embeds_key(CROP, MD5, SHA)
@@ -147,7 +147,7 @@ def case_preset_stream(tmp: Path) -> None:
     with contextlib.redirect_stdout(buf):
         streamed = RunConfig.from_profile("base").merged(**{"encoder.stream": "true"})
     if streamed.encoder.stream is not True:
-        raise AssertionError(f"base --set encoder.stream=true -> {streamed.encoder.stream!r}")
+        raise AssertionError(f"base --set encoder.qwen3vl.stream=true -> {streamed.encoder.stream!r}")
     if buf.getvalue():
         raise AssertionError(f"для энкодера {plain.encoder.name!r} предупреждения быть не должно: "
                              f"{buf.getvalue()!r}")
@@ -643,7 +643,7 @@ def case_base_stream_effective(tmp: Path) -> None:
     if group_cfg.generation.offload != "group" or group_cfg.encoder_pin_memory is not True:
         raise AssertionError(f"offload=group выключил pin: {group_cfg.encoder_pin_memory!r}")
     if group_cfg.merged(**{"encoder.pin_memory": "0"}).encoder_pin_memory is not False:
-        raise AssertionError("--set encoder.pin_memory=0 не выключает pin")
+        raise AssertionError("--set encoder.qwen3vl.pin_memory=0 не выключает pin")
     print("  ok: pin включён и при offload=group; выключает только encoder.pin_memory=0")
     print(f"  ok: _STREAM_WARNED удалён, stream=true работает; auto -> {enc.device}, "
           f"stream={enc.stream}, prefetch={enc.prefetch}")

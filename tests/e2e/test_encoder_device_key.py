@@ -9,7 +9,7 @@
 
 Кейсы:
 
-1. **Эталон имени.** `base/cpu/bfloat16` (явный `--set encoder.device=cpu`) + crop 1376x768 -> имя
+1. **Эталон имени.** `base/cpu/bfloat16` (явный `--set encoder.qwen3vl.device=cpu`) + crop 1376x768 -> имя
    литералом совпадает с историческим `embeds_<md5>_<sha>_1376x768.pt` (иначе все CPU-записи
    в `cache/` стали бы мёртвыми). Умолчание теперь `device=auto` -> cuda, поэтому cpu-эталон
    проверяется явным значением.
@@ -81,7 +81,7 @@ def case_legacy_name() -> None:
     поэтому cpu-эталон фиксируется явным значением, а не «умолчанием».
     """
     cfg = _profile_base(**{"encoder.device": "cpu"})
-    for label, enc in (("явный --set encoder.device=cpu", cfg.encoder),
+    for label, enc in (("явный --set encoder.qwen3vl.device=cpu", cfg.encoder),
                        ("явный EncoderConfig", EncoderConfig(name="base", cache_tag="base",
                                                             device="cpu"))):
         key = f"embeds_{MD5}_{SHA}{enc.key_suffix}_{CROP[0]}x{CROP[1]}.pt"

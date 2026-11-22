@@ -152,14 +152,21 @@ def case_explain_params() -> None:
         for header in ("scope", "name", "type", "default", "range/choices", "readonly", "doc"):
             if header not in text:
                 raise AssertionError(f"{preset}: в таблице нет колонки {header!r}: {text[:300]!r}")
+        from qwenstyle.paths import CUBE_TO_CONFIG, EXTRA_CONFIG_ALIASES
+
+        canonical = {config: cube for cube, config in CUBE_TO_CONFIG.items()}
+        canonical.update(EXTRA_CONFIG_ALIASES)
         for kind, backend in (("generation", cfg.generation.backend),
                               ("upscale", cfg.upscale.backend)):
             specs = backend_parameters(kind, backend)
             for spec in specs:
                 if spec.name not in text:
                     raise AssertionError(f"{preset}: в таблице нет параметра {spec.name!r}")
-                if spec.path not in text:
-                    raise AssertionError(f"{preset}: нет готового пути --set {spec.path!r}")
+                # `--set` принимает только канонические пути (параметры кубиков); для моделей без
+                # кубиков строка помечена как «ключ только для RunConfig»
+                expected = canonical.get(spec.path, spec.path)
+                if expected not in text:
+                    raise AssertionError(f"{preset}: нет готового пути --set {expected!r}")
         readonly = [spec for kind, backend in (("generation", cfg.generation.backend),
                                                ("upscale", cfg.upscale.backend))
                     for spec in backend_parameters(kind, backend) if spec.readonly]

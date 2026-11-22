@@ -24,4 +24,4 @@ generation:
 size_px: 1440             # 1440p native: 2560x1440 при 16:9
 
 upscale: null              # без апскейла: native 960p (у VRAM16 — 1440p). Включить: --upscale 1.5
-                           # или --set upscale.target_height=…; factor: 0 сам апскейл НЕ выключает
+                           # или --set post.upscale.esrgan.target_height=…; factor: 0 сам апскейл НЕ выключает

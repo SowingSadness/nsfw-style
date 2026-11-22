@@ -22,7 +22,7 @@
 6. **`--upscale=null`**: `parse_upscale` (`null|none|off` -> `None`, конечное число >= 0 ->
    `float`, а пустая строка/`nan`/`inf`/отрицательное/мусор -> `ValueError`) и превращение `None`
    в пустой блок `upscale` (апскейл выключен целиком);
-7. **обратное включение**: `--set upscale.target_height=1440` на `VRAM12-release` снова даёт
+7. **обратное включение**: `--set post.upscale.esrgan.target_height=1440` на `VRAM12-release` снова даёт
    апскейл (960 -> 1440, фактор 1.5) — приоритет высоты над `factor` не поехал;
 8. **регистр в `--preset`**: `vram12` -> `VRAM12-release` (та же функция `resolve_preset`, что
    у `gen`), путь к YAML возвращается как есть, два имени с разным регистром — `ConfigError`.
@@ -226,7 +226,7 @@ def case_parse_upscale() -> None:
 
 
 def case_upscale_reenable() -> None:
-    """7. `--set upscale.target_height=1440` на `VRAM12-release` снова включает апскейл (×1.5)."""
+    """7. `--set post.upscale.esrgan.target_height=1440` на `VRAM12-release` снова включает апскейл (×1.5)."""
     cfg = RunConfig.from_profile("VRAM12-release").merged(**{"upscale.target_height": "1440"})
     native = int(cfg.size_px or 0)
     if native != 960:
@@ -238,7 +238,7 @@ def case_upscale_reenable() -> None:
     if cfg.upscale.factor:
         raise AssertionError(f"upscale.factor={cfg.upscale.factor} — множитель не должен "
                              f"перебивать target_height")
-    print(f"  ok: VRAM12-release + --set upscale.target_height=1440 -> {native} * {factor:g} = "
+    print(f"  ok: VRAM12-release + --set post.upscale.esrgan.target_height=1440 -> {native} * {factor:g} = "
           f"{int(round(native * factor))}")
 
 

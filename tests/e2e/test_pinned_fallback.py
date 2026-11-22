@@ -165,7 +165,7 @@ def case_pin_policy() -> None:
 
     Pin — транспорт, а не математика: результат бит-в-бит от него не зависит, поэтому
     `offload=group` его больше не выключает. Явное выключение — `encoder.pin_memory=0`
-    (`--set encoder.pin_memory=0`); если pinned-аллокация всё же упадёт, `_PinnedPool`
+    (`--set encoder.qwen3vl.pin_memory=0`); если pinned-аллокация всё же упадёт, `_PinnedPool`
     деградирует до pageable RAM (кейсы 3/4) — это страховка, а не штатный режим.
     """
     from qwenstyle.config import RunConfig
@@ -203,7 +203,7 @@ def case_pin_policy() -> None:
     for name in ("VRAM16-release-anime", "VRAM16-preview"):
         off = RunConfig.from_profile(name).merged(**{"encoder.pin_memory": "0"})
         if off.encoder_pin_memory:
-            raise AssertionError(f"{name}: --set encoder.pin_memory=0 не выключил pin")
+            raise AssertionError(f"{name}: --set encoder.qwen3vl.pin_memory=0 не выключил pin")
     print("  ok: выключает только явный encoder.pin_memory=0")
 
     # Правило не следует за offload: включение группы у не-group пресета pin не трогает.

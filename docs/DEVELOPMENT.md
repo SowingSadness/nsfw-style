@@ -40,8 +40,8 @@ dev-пресеты и dev-бекенды. Всё, что адресуется п
 Удалены (пресеты есть только в истории): `preview-qwen`, `anime`, `full-qwen`, `qwen-2k`, `qwen`,
 `flux2`, `preview`, `demo`, `full-flux2` — например, FLUX.2-пресеты (`flux2`, `preview`, `demo`,
 `full-flux2`) удалены вместе с остальными dev-надстройками. Бекенд `qwenstyle/backends/flux2.py`
-при этом остался — без пресетов он доступен только через `--set generation.backend=flux2`
-и прямую сборку `RunConfig`.
+при этом остался — без пресетов он доступен только YAML-файлом с `generation.backend: flux2`
+(через `--config <файл>`): параметра-кубика у FLUX.2 нет, а `--set` принимает только пути кубиков.
 
 | `max-h3` | `extends: h3-image`, `size_px: 3072` → 4096×3072, 6 шагов PDD, fp8 + `offload: group` | максимальный кадр H3 на 16 ГиБ (1440p 165 s, 1792p 174 s, 2048p 182 s, 2560p 204 s, 3072p 237 s); 4096p проходит генерацию и VAE, но падает в постобработке на хостовой RAM |
 
@@ -104,7 +104,7 @@ cache/
 
 `pin_memory` включён по умолчанию **и при `generation.offload=group`**: `RunConfig.encoder_pin_memory`
 читает только поле `encoder.pin_memory`, поэтому выключить его можно исключительно явно
-(`--set encoder.pin_memory=0`). При неудаче pinned-аллокации `_PinnedPool` деградирует до pageable RAM
+(`--set encoder.qwen3vl.pin_memory=0`). При неудаче pinned-аллокации `_PinnedPool` деградирует до pageable RAM
 (результат **бит-в-бит**, медленнее только H2D) и печатает причину — это страховка, а не штатный режим.
 
 ## 6. История миграции

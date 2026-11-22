@@ -39,7 +39,7 @@ K/V в RAM (иначе OOM)**. `VRAM12-*` и `VRAM16-*` пинят `kv_cache: of
 префикс занимает 3.2–7.1 ГиБ VRAM (16:9) и выбивает тариф (бит-в-бит, +13 % времени; `VRAM12-release` —
 −3.07 ГиБ / +4 %). Замеры: [`docs/bench/vram-tiers.md`](docs/bench/vram-tiers.md) (тарифы),
 [`docs/bench/kv-cache-offload.md`](docs/bench/kv-cache-offload.md) (режимы, случай `nita-camp`).
-Переопределение: `--set generation.kv_cache=true|offload|false|auto-offload-ref2`.
+Переопределение: `--set strategy.kv_offload.mode=true|offload|false|auto-offload-ref2`.
 
 Жёсткие правила рекомендаций:
 
@@ -49,7 +49,7 @@ K/V в RAM (иначе OOM)**. `VRAM12-*` и `VRAM16-*` пинят `kv_cache: of
   30.9 ГиБ fp8-трансформера в RAM, на 32 ГиБ это упирается в спилл.
 - **Дефолтный энкодер — `heretic`** (`encoder.name: heretic`, `cache_tag: heretic`): только на его
   conditioning LoRA обучалась. `base` — осознанным флагом (`--text-encoder base` или
-  `--set encoder.name=base`), и это другой ключ кэша (тег `_te-heretic` в имени файла).
+  `--set encoder.qwen3vl.name=base`), и это другой ключ кэша (тег `_te-heretic` в имени файла).
 - **Новый пресет обязан попасть в профиль** — в `presets=…` (и при необходимости в `repos`/`disk_gib`)
   `qwenstyle/profiles.py`; иначе он существует только для разработки и должен быть помечен dev-only
   в `docs/DEVELOPMENT.md`. Публичные имена — `<тариф>-<stage>[-anime]` (`VRAM8`/`VRAM12`/`VRAM16`);
@@ -114,10 +114,12 @@ sort), `prompt-<model>.txt`, опциональный `project.yaml` и `out/<YY
 `gen --workflow <файл>` (переходный режим: композиция переводится в `RunConfig`, прогон тот же —
 кадр побайтно совпадает с `run --config`). Геометрия кадра — кубик `source.frame`
 (`width`/`height` кратны 32, `0` = авто по референсу; `ref_crop_side` — сторона сетки референсов),
-входы — `source.txtFileImage` (`prompt` + явные `Image1…Image10`). Устаревшие `--set`-написания
-(`generation.steps`, `generation.sampler_kwargs.offload_blocks`, `encoder.device`, `upscale.tile`)
-работают через таблицу `qwenstyle/preset_paths.py`. Отчёт: `out/bench/cutover.md` появится на шаге
-`cutover`.
+входы — `source.txtFileImage` (`prompt` + явные `Image1…Image10`). **`--set` принимает только пути
+параметров кубиков** (`transformer.qwen_image21.steps`, `encoder.qwen3vl.device`,
+`decoder.vae.qwen21.tile_px`, `source.frame.height`), плюс ключи запуска (`out`, `seed`,
+`cache_supersede`, `batch.*`); таблица `qwenstyle/paths.py` переводит их в поля `RunConfig` на время
+переходного рантайма. Старых написаний (`generation.steps`, `encoder.device`, `upscale.tile`) больше
+нет — неизвестный ключ отвергается списком допустимых.
 
 **Кубики (план `.pi/plans/cube-architecture.md`, шаги 1–6).** Пайплайн описан стадиями
 (`qwenstyle/cube.py` — контракт и реестр, `qwenstyle/compose.py` — компоновщик, `qwenstyle/cubes/*` —
@@ -353,7 +355,7 @@ sha256 картинки попадает сегмент `noref` (`io.NOREF_SHA`)
 |---|---|---|
 | Веса модели и LoRA | `hf-cache/hub/...` (32 GiB, `blobs/` + относительные симлинки) | 31 GiB + 419 MiB загрузки + запросы к Hub |
 | fp8-трансформер | `cache/fp8_transformer/` (base) и `cache/fp8_transformer_turbo/` (turbo) — по 6.7 GiB | каст 26 с + чтение 14.2 ГБ вместо 6.7: старт 36.5 s → ~4 s |
-| Эмбеддинги промта и картинки | `cache/embeds_<md5(prompt)[:12]>_<sha256(image)[:12]>[_te-<энкодер>][-<dtype>][-dev-<device>]_<W>x<H>.pt` + `.json` (6.5 МБ @640, 11.6 МБ @1024); сегмент `-dev-cuda` появляется на GPU-пути (умолчание `auto` на машине с CUDA), `bfloat16`/`cpu` без сегмента | **35 с cold / 6 с warm** GPU-энкода (умолчание); 55 с @864×480 и 255 с @1376×768 — только при `--set encoder.device=cpu` |
+| Эмбеддинги промта и картинки | `cache/embeds_<md5(prompt)[:12]>_<sha256(image)[:12]>[_te-<энкодер>][-<dtype>][-dev-<device>]_<W>x<H>.pt` + `.json` (6.5 МБ @640, 11.6 МБ @1024); сегмент `-dev-cuda` появляется на GPU-пути (умолчание `auto` на машине с CUDA), `bfloat16`/`cpu` без сегмента | **35 с cold / 6 с warm** GPU-энкода (умолчание); 55 с @864×480 и 255 с @1376×768 — только при `--set encoder.qwen3vl.device=cpu` |
 | fp8-трансформер H3 (33B) | `cache/fp8_transformer_h3_image/` — 30.93 GiB, 17 шардов + `index.json`/`precision.json` | каст 61.7 GiB bf16 однократно **202.8 s** + запись; чтение 0.4–0.6 s вместо десятков минут |
 | Веса энкодера 32B | `cache/models/weights/h3qwen32-heretic/` — 62.13 GiB bf16, **3 шарда** < 40 GiB (23.79/23.86/14.49 GiB); читаются **позиционно** (`seek+readinto` по своему разбору заголовка safetensors, `qwenstyle/shards.py`, без mmap и без `safetensors`) | в RAM целиком не поднимаются (только `stream=true` по модулям, загрузка 0.4 s); commit не растёт на размер шардов: было `safe_open` **+62.37 GiB** на три шарда, стало **+0.00 GiB**; дробление шардов — обход бага safetensors (D12, для энкодера больше не нужен) |
 | Эмбеддинги H3 (`text_embeds`) | `cache/text_embeds_<md5(prompt)[:12]>_<sha256(image)[:12]|**noref**>_te-h3qwen32-heretic-dev-cuda_<W>x<H>.pt` + `.json` — hidden state **после 50-го слоя** (hidden 5120), `(1,N,5120)` | **118.9 s** cold на GPU (218 токенов T2I) / 82.8 s (1249 токенов edit) → 0 s из кэша; `peak_uss` 5.25 GiB, `peak_vram` 1.93 GiB |
@@ -367,12 +369,12 @@ sha256 картинки попадает сегмент `noref` (`io.NOREF_SHA`)
 `prefetch=4`), поэтому в VRAM живёт один модуль (пик VRAM ~1 GiB, 3.5 GiB на промте в 4128
 токенов; `peak_uss` ~4.7 GiB), а веса не поднимаются в RAM целиком. После энкода VRAM и открытые шарды освобождаются
 (`text_encoder=None`), в шагах сэмплера энкодер не участвует. На CPU энкод идёт только явным
-`--set encoder.device=cpu` (55 с @864×480 … 255 с @1376×768, RSS 17.6 GiB) и пишет запись кэша
+`--set encoder.qwen3vl.device=cpu` (55 с @864×480 … 255 с @1376×768, RSS 17.6 GiB) и пишет запись кэша
 без сегмента `-dev-cuda`.
 
-Энкодер больше RAM читается по слоям с диска (`--set encoder.stream=true`, §4): веса не поднимаются
+Энкодер больше RAM читается по слоям с диска (`--set encoder.qwen3vl.stream=true`, §4): веса не поднимаются
 в память целиком, но ключ кэша эмбеддингов при этом не меняется — записи не пересоздаются. То же и
-для GPU-режима (`--set encoder.device=cuda --set encoder.prefetch=4` — он же умолчание на машине
+для GPU-режима (`--set encoder.qwen3vl.device=cuda --set encoder.qwen3vl.prefetch=4` — он же умолчание на машине
 с CUDA): в VRAM живёт один модуль, ключ тот же, а устройство энкода уже отражено сегментом
 `-dev-cuda`. Уборка устаревших записей — только отложенная задача `cache_supersede` в конце
 `run`/`gen` (R2), никогда во время энкода.
@@ -389,7 +391,7 @@ fp8 (+64.8 GiB под 30.9 GiB) и по-прежнему на `safe_open`, по�
 **Память.** Модель 30.86 GiB (23 файла) в bf16 в 16 ГБ не влезает. Раскладка: transformer
 14.2 ГБ bf16 → 6.6 ГБ fp8 на GPU; text_encoder 17.5 ГБ — стримингом на GPU (пик VRAM ~1 GiB)
 и только при промахе кэша эмбеддингов, после энкода освобождается; на CPU он считается только
-с `--set encoder.device=cpu`; VAE 1.35 ГБ на GPU (slicing+tiling); LoRA 420 МБ.
+с `--set encoder.qwen3vl.device=cpu`; VAE 1.35 ГБ на GPU (slicing+tiling); LoRA 420 МБ.
 VRAM после загрузки: **9.0/16.0 GiB**; RSS **1.4 GiB** на быстром пути (без text-encoder),
 17.6 GiB — только при CPU-энкоде.
 
@@ -455,13 +457,13 @@ attention: спилл активаций (`free=0` на 10800 токенах) с
 | 0.5 s | `load_lora_weights` + `set_adapters` + 448 тензоров fp8 → bf16 |
 | 25.8 s + 14.0 s | однократно: bf16 → fp8 каст + запись `cache/fp8_transformer` |
 | **35 s cold / 6 s warm / 0 s** | **энкод промта на GPU** (умолчание `encoder.device=auto`): 35 s cold — 1283 токена @640×480, 6 s warm — 2513 токенов @1440×1088, 0 s — попадание в кэш эмбеддингов |
-| 55 s / 255 s | CPU-энкод Qwen3VL-8B на 864×480 / 1376×768 — только при `--set encoder.device=cpu` |
+| 55 s / 255 s | CPU-энкод Qwen3VL-8B на 864×480 / 1376×768 — только при `--set encoder.qwen3vl.device=cpu` |
 | 6 s / 38 s | генерация: 8 шагов @640 / 25 шагов @1024 |
 | **11 s** | полный прогон `--preview` после прогрева обоих кэшей |
-| ~350 s | первый прогон @1024 с CPU-энкодом (`--set encoder.device=cpu`); с GPU-энкодом энкод стоит 6–35 s |
+| ~350 s | первый прогон @1024 с CPU-энкодом (`--set encoder.qwen3vl.device=cpu`); с GPU-энкодом энкод стоит 6–35 s |
 
 Итог: с GPU-энкодом (умолчание) холодный прогон уже не упирается в энкод (6–35 s) — время съедают
-шаги сэмплера; доминирует CPU-энкод (55–255 с) только при `--set encoder.device=cpu`, а после
+шаги сэмплера; доминирует CPU-энкод (55–255 с) только при `--set encoder.qwen3vl.device=cpu`, а после
 прогрева кэша эмбеддингов всё упирается в шаги в обоих случаях.
 
 **Из чего состоит пик VRAM** (замер `python -m qwenstyle bench vram`, 4080, fp8, LoRA 0.7, эмбеддинги из кэша):
@@ -514,13 +516,13 @@ attention: спилл активаций (`free=0` на 10800 токенах) с
   (проверено побайтным sha256 кадра);
 - `false` — кеша нет, префикс пересчитывается каждый шаг (~2× медленнее: 51 s против 24 s на 768p/3 рефа).
 
-Переопределение: `--set generation.kv_cache=offload|true|false`. Путь
+Переопределение: `--set strategy.kv_offload.mode=offload|true|false`. Путь
 `generation.sampler_kwargs.kv_cache` — **удалён** (он не может жить в `sampler_kwargs`: ключ ставит
 `presets/base.yaml`, а ключи `sampler_kwargs` валидируются по спекам бекенда, и наследующий `base`
 `h3-image`/`flux2` падал бы на неизвестном ключе). Ключ эмбеддингов от `kv_cache` не зависит.
 Полный замер и выводы: `docs/bench/kv-cache-offload.md`.
 
-**Диск-стриминг текст-энкодера (`--set encoder.stream=true`).** Модель собирается на meta-параметрах
+**Диск-стриминг текст-энкодера (`--set encoder.qwen3vl.stream=true`).** Модель собирается на meta-параметрах
 (`accelerate.init_empty_weights(include_buffers=False)`, буферы вроде `rotary_emb.inv_freq` живые) и
 грузит веса каждого модуля перед его forward позиционным чтением (`seek+readinto` без mmap,
 `qwenstyle/shards.py`), освобождая после; код —
@@ -550,7 +552,7 @@ python -m qwenstyle bench encoder --repo <repo> --subfolder text_encoder --token
   ставит `stream=True`/`prefetch=4` (§3). Для `encoder.name=base` (Qwen-Image-2.1) веса Qwen3VL-8B
   тоже грузит этот загрузчик — `streaming.load_text_encoder(..., device="cuda")`, вместе
   с vision-башней (16.33 GiB в том же наборе); предупреждения «веса грузит diffusers, режим
-  пропущен» больше нет. С `--set encoder.device=cpu` работает прежнее умолчание поля
+  пропущен» больше нет. С `--set encoder.qwen3vl.device=cpu` работает прежнее умолчание поля
   (`stream=False`) и старый CPU-путь; внешние энкодеры (FLUX.2, heretic-te, `encoder.local_dir`)
   идут через тот же код.
 - **Проверка на 4-шардовых весах heretic-te** (`cache/weights/heretic-te`, 750 тензоров, 16.33 GiB,
@@ -565,8 +567,8 @@ python -m qwenstyle bench encoder --repo <repo> --subfolder text_encoder --token
 
 **GPU-стриминг энкодера (RAM-стейджинг + конвейер).** Тот же `qwenstyle/streaming.py`, но веса
 модулей читаются с диска в pinned-буфер RAM фоновым потоком и асинхронно копируются в VRAM
-(`--set encoder.stream=true --set encoder.device=cuda --set encoder.prefetch=4
-[--set encoder.pin_memory=0] [--set encoder.lookahead=N]`), в VRAM живёт только текущий модуль.
+(`--set encoder.qwen3vl.stream=true --set encoder.qwen3vl.device=cuda --set encoder.qwen3vl.prefetch=4
+[--set encoder.qwen3vl.pin_memory=0] [--set encoder.qwen3vl.lookahead=N]`), в VRAM живёт только текущий модуль.
 Источник чисел — `out/bench/te-gpu-stream.md` (шаг 5 плана `te-gpu-streaming`), энкодер
 `Qwen3ForCausalLM` 8.19B / 15.26 GiB bf16, `HF_HUB_OFFLINE=1`.
 
@@ -586,7 +588,7 @@ pinned 6.6–8.5 GiB весов fp8-трансформера. Сейчас он 
 уживается с group-offload; чтение весов — позиционный `seek+readinto`, §4 ниже):
 
 - `pin_memory` включён по умолчанию **и при `offload=group`** — `RunConfig.encoder_pin_memory` читает
-  только поле `encoder.pin_memory`; выключить можно исключительно явно (`--set encoder.pin_memory=0`);
+  только поле `encoder.pin_memory`; выключить можно исключительно явно (`--set encoder.qwen3vl.pin_memory=0`);
 - если pinned-аллокация всё же не удалась, `_PinnedPool` деградирует до pageable RAM, печатает причину
   (`[stream] pinned-буфер … не выделился …`) и продолжает; результат **бит-в-бит** (pin — транспорт,
   не математика, ключ кэша эмбеддингов от него не зависит).
@@ -622,7 +624,7 @@ pinned 6.6–8.5 GiB весов fp8-трансформера. Сейчас он 
   I/O-bound читается по строке `budget` (ожидание данных) и по `read` vs `compute`, не по нему.
 - Умолчание — `device=auto`: на машине с CUDA это `cuda` + `stream=True` + `prefetch=4`
   (+`pin_memory=True`, `lookahead=1`), на машине без CUDA — прежние `cpu`/`stream=False`/`prefetch=0`.
-  Откат на CPU-путь — `--set encoder.device=cpu`. Ключ кэша конвейер не трогает
+  Откат на CPU-путь — `--set encoder.qwen3vl.device=cpu`. Ключ кэша конвейер не трогает
   (только `device`/`dtype` — сегментами имени).
 - **Вердикт по fp8-кэшу энкодера:** для 8B — **не нужен** (read доминирует, ожидаемая экономия
   < 2×, модель и так влезает в page cache); для 32B (62.1 GiB в 63.6 GiB RAM с активациями
@@ -813,7 +815,7 @@ pinned 6.6–8.5 GiB весов fp8-трансформера. Сейчас он 
   качеству** и лежит в `git stash@{0}` (описание там же). Не возвращать: каждый тайл получает свою
   центрированную систему координат RoPE и рисует свою сцену.
 
-**Тайлинг декодера VAE (`generation.sampler_kwargs.vae_tile_px`, умолчание 512).** Декодер
+**Тайлинг декодера VAE (`decoder.vae.qwen21.tile_px`, умолчание 512).** Декодер
 `AutoencoderKLQwenImage21` режет кадр тайлами; историческое умолчание diffusers (256 px, шаг 192)
 оставляло на ровных поверхностях заметную сетку: компонента 16 px (клетка латента) в спектре
 асфальта была ×2.71 относительно медианы. Замер на проекте `nita-model-anime-3d`
@@ -960,7 +962,7 @@ fusal style.
 - Ключ кэша эмбеддингов = `md5(промт)[:12] + sha256(входного файла)[:12] + WxH`, рядом лежит `.json`
   с полным набором параметров. Любая правка формулировки или другой входной файл = miss и
   **6–35 с GPU-кодирования** Qwen3VL-8B (35 s cold @640×480, 6 s warm @1440×1088); на CPU
-  (`--set encoder.device=cpu`) — 55 с @864×480 … 255 с @1376×768.
+  (`--set encoder.qwen3vl.device=cpu`) — 55 с @864×480 … 255 с @1376×768.
 - Финальные формулировки держать в проекте — `prompts/<project>/prompt-<model>.txt` (вызов
   `gen --prompt <project>/<stem>`); низкоуровневый `run` по-прежнему принимает `--prompt-file`.
   В скрипте промт не править.
@@ -1013,7 +1015,7 @@ done
 | Ось | Что стоит |
 |---|---|
 | `--seed`, `--steps`, `--lora-scale`, повторный прогон | только GPU: 6 с @640 / 38 с @1024 (turbo: 5 с / 21 с) |
-| текст промта, входной файл, `--resolution` | GPU-энкод: 35 с cold @640×480 (1283 токена) / 6 с warm @1440×1088 (2513), 0 с из кэша; CPU — 55 с @864×480, 255 с @1376×768 (только `--set encoder.device=cpu`) |
+| текст промта, входной файл, `--resolution` | GPU-энкод: 35 с cold @640×480 (1283 токена) / 6 с warm @1440×1088 (2513), 0 с из кэша; CPU — 55 с @864×480, 255 с @1376×768 (только `--set encoder.qwen3vl.device=cpu`) |
 | `h3-image`: текст промта, вход/`noref`, `--resolution` | 32B-энкод **118.9 s** на новую пару (218 токенов) / 82.8 s (1249), 0 s из кэша; отдельный процесс на фазу, `peak_uss` 5.25 GiB |
 | `h3-image`: `--seed`, повторный прогон | только GPU: 19.2–24.5 s на 512² (6 шагов PDD, `--steps` игнорируется) |
 | первый старт на машине / `--rebuild-fp8-cache` | 25.8 с каста + 14 с записи, однократно |
@@ -1051,7 +1053,7 @@ done
 `upscale: null` → native 1696×960 / 2560×1440. 4K — либо `VRAM16-4k-fast` / `VRAM16-r3-*`
 (1088p или 3 референса + ESRGAN до 2160), либо `--upscale 1.5` у release. Прежняя связка
 «1080p (1440×1088, 25 шагов **66–67 s**, `[done] total 75 s`) + ESRGAN ×1.32 до 1906×1440»
-работает через `--set upscale.target_height=1440`. Нативный 1440p (2560×1440, 10800 токенов)
+работает через `--set post.upscale.esrgan.target_height=1440`. Нативный 1440p (2560×1440, 10800 токенов)
 с `kv_cache: offload` идёт **8.2 s/шаг** (25 шагов — 205 s, пик 12.85 ГиБ,
 [`docs/bench/vram-tiers.md`](docs/bench/vram-tiers.md)); с KV в VRAM и без офлоада — 16–17 s/шаг
 из-за спилла активаций (§4).
@@ -1060,7 +1062,7 @@ done
 в `run`/`gen` выключает его **целиком** (native-кадр, пары `<seed>-<steps>-gen.png` нет). `factor: 0` сам по
 себе **не выключает**: `target_height` пресета главнее, поэтому `--upscale 0` при
 `upscale.target_height: 1440` всё равно гонит ESRGAN (1440 / 1088 → ×1.32); выключить —
-`--upscale=null` или `--set upscale.target_height=0`. Автоматический пропуск: если кадр уже не ниже
+`--upscale=null` или `--set post.upscale.esrgan.target_height=0`. Автоматический пропуск: если кадр уже не ниже
 `upscale.target_height` или фактор ≈ 1, бекенд не загружается, печатается
 `[post] upscale пропущен: …`, суффикс `-x1` в имени не появляется.
 
@@ -1087,10 +1089,10 @@ done
 - **D6.** ✅ Старт при промахе кэша эмбеддингов был долгим (text-encoder 17.5 ГБ + 55–255 с CPU);
   закрыто GPU-энкодом по умолчанию (**35 s** cold / **6 s** warm / 0 s из кэша).
   Результат решения (замеры — §4, `out/bench/te-gpu-stream.md`):
-  * «энкодер больше RAM» — закрыто диск-стримингом (`--set encoder.stream=true`): `peak_uss`
+  * «энкодер больше RAM» — закрыто диск-стримингом (`--set encoder.qwen3vl.stream=true`): `peak_uss`
     16.93 → 1.745 GiB, бит-в-бит;
   * «CPU-энкод долгий» — закрыто **GPU-стримингом**, теперь это умолчание (`encoder.device=auto` →
-    `cuda`, `prefetch=4`; откат — `--set encoder.device=cpu`): на 512 токенах **97.6 → 10.4 s (9.4×)**,
+    `cuda`, `prefetch=4`; откат — `--set encoder.qwen3vl.device=cpu`): на 512 токенах **97.6 → 10.4 s (9.4×)**,
     на реальном промте (4128 токенов) — GPU **10.5 s** против ~787 s CPU (**~75×, ОЦЕНКА**;
     нижняя граница по известным 255 s — ~24×), при пиковых 3.5 GiB VRAM. GPU-время от длины промта
     не зависит — режим I/O-bound (ожидание данных 0.92–0.97).
@@ -1104,7 +1106,7 @@ done
   processor/tokenizer остаются базовые — так предписывает карточка LoRA. Тег `_te-heretic` попал в ключ
   кэша эмбеддингов, поэтому записи двух энкодеров не путаются, а базовые остаются валидными.
   Энкодер грузится только при промахе кэша; по умолчанию (`encoder.device=auto`) он стримится на GPU
-  (пик VRAM ~1 GiB, после энкода освобождается), на CPU — только `--set encoder.device=cpu`; цена —
+  (пик VRAM ~1 GiB, после энкода освобождается), на CPU — только `--set encoder.qwen3vl.device=cpu`; цена —
   новый энкод на каждую пару (промт, картинка, резолюция): 6–35 с на GPU (55 с @640 / 255 с @1024 на CPU).
 - **D8. Гранулярность чтения весов энкодера — по пути данных закрыто, по скорости тёплого плеча нет.**
   Данные больше не идут через mmap-связку `safetensors`: шард разбирается своим заголовком, тензор

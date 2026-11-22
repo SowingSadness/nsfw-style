@@ -100,6 +100,24 @@ def _table(headers: list[str], rows: list[list[str]], indent: str = "  ") -> Non
         print(indent + line)
 
 
+def canonical_of(spec: Any) -> str:
+    """Канонический путь `--set` для параметра бекенда (или его поле конфига, если кубика нет).
+
+    `--set` принимает только пути параметров кубиков (`qwenstyle/paths.py`), поэтому таблица
+    `--explain-params` показывает именно их; у моделей без кубиков (H3, FLUX.2) остаётся поле
+    `RunConfig` с пометкой.
+    """
+    from ..paths import CUBE_TO_CONFIG, EXTRA_CONFIG_ALIASES
+
+    canonical = EXTRA_CONFIG_ALIASES.get(spec.path)
+    if canonical:
+        return canonical
+    for cube_path, config_path in CUBE_TO_CONFIG.items():
+        if config_path == spec.path:
+            return cube_path
+    return f"{spec.path} (нет параметра кубика: ключ только для RunConfig)"
+
+
 def explain_params(cfg: RunConfig) -> None:
     """Таблица `scope | name | type | default | range/choices | readonly | doc` по бекендам.
 
@@ -128,8 +146,9 @@ def explain_params(cfg: RunConfig) -> None:
             (spec.doc or "-")[:100] + ("…" if len(spec.doc or "") > 100 else ""),
         ] for spec in specs]
         _table(headers, rows)
-        settable = [spec.path for spec in specs if not spec.readonly]
-        fixed = [f"{spec.path}={spec.format_default()}" for spec in specs if spec.readonly]
+        settable = [canonical_of(spec) for spec in specs if not spec.readonly]
+        fixed = [f"{canonical_of(spec)}={spec.format_default()}"
+                 for spec in specs if spec.readonly]
         print("  --set ключи: " + (", ".join(settable) or "—"))
         if fixed:
             print("  фиксировано моделью (readonly): " + ", ".join(fixed))
@@ -189,7 +208,8 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     show.add_argument("preset", nargs="?", default="base", metavar="PRESET",
                       help=f"имя пресета ({', '.join(available_presets())}) или путь к YAML; по умолчанию base")
     show.add_argument("--set", dest="sets", action="append", default=[], metavar="KEY=VALUE",
-                      help="переопределить параметр, например generation.steps=8 или encoder.name=heretic "
+                      help="переопределить параметр кубика, например "
+                           "transformer.qwen_image21.steps=8 или encoder.qwen3vl.name=base "
                            "(можно повторять)")
     show.add_argument("--json", action="store_true", help="вывести конфиг как JSON (для скриптов)")
     show.add_argument("--explain-params", dest="explain_params", action="store_true",

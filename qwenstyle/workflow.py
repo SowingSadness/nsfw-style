@@ -94,10 +94,11 @@ class Workflow:
         return compose(self.pipeline)
 
     def apply_sets(self, paths: list[str] | tuple[str, ...]) -> "Workflow":
-        """Применить `--set`-пути (новые или устаревшие написания) к композиции и запуску.
+        """Применить `--set`-пути к композиции и запуску.
 
-        Маршрутизация — по `ParameterSpec.path` кубиков: `--set encoder.qwen3vl.device=cpu`
-        (новое), `--set encoder.device=cpu` (старое), `--set run.seeds=1-3` (запуск).
+        Путь — **параметр кубика** (`encoder.qwen3vl.device`, `transformer.qwen_image21.steps`,
+        `decoder.vae.qwen21.tile_px`) или ключ запуска (`run.seeds`, `run.out`). Других написаний
+        нет: неизвестный ключ отвергается списком допустимых.
         """
         if not paths:
             return self
@@ -121,11 +122,6 @@ class Workflow:
             index, name, spec = target
             cubes[index][name] = _coerce(value, spec.type)
         if unknown:
-            from .preset_paths import REMOVED_PATHS
-
-            hints = [f"{key}: {REMOVED_PATHS[key]}" for key in unknown if key in REMOVED_PATHS]
-            if hints:
-                raise ValueError("--set: эти ключи больше не параметры — " + "; ".join(hints))
             available = sorted({f"{cube_id}.{param.name}" for cube_id in ids
                                 for param in get_cube(cube_id).params})
             raise ValueError(f"--set: неизвестные ключи {unknown}; допустимые пути: "
@@ -169,13 +165,9 @@ def _resolve_path(path: str, ids: list[str]):
     `decoder.vae.qwen21.tile_px`) и **скоуп-форма прежнего конфига** (`generation.steps`,
     `upscale.tile`) — плюс все устаревшие написания из `preset_paths.LEGACY_PATHS`.
     """
-    from .preset_paths import LEGACY_PATHS
-
-    candidates = {path, LEGACY_PATHS.get(path, path)}
     for index, cube_id in enumerate(ids):
         for param in get_cube(cube_id).params:
-            forms = {param.path, f"{cube_id}.{param.name}"}
-            if forms & candidates:
+            if f"{cube_id}.{param.name}" == path:
                 return index, param.name, param
     return None
 

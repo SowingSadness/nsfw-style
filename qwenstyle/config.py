@@ -254,7 +254,7 @@ def check_sampler_kwargs(backend: str, raw: Any) -> None:
 def readonly_params(cfg: "RunConfig", paths: Iterable[str]) -> list[ParameterSpec]:
     """Спеки, в которые попал `--set`/флаг, но значение фиксировано моделью.
 
-    Пример: `--set generation.steps=12` у `h3-image` (6 шагов PDD) или любой `max_images`.
+    Пример: `--set transformer.qwen_image21.steps=12` у `h3-image` (6 шагов PDD) или любой `max_images`.
     CLI обязан предупредить («значение проигнорировано»), а не делать вид, что применилось.
     """
     touched = {str(path).strip() for path in paths or () if str(path or "").strip()}
@@ -305,7 +305,7 @@ def encoder_dtype_canon(dtype: str | None) -> str:
     """Канон `encoder.dtype`: `bf16` -> `bfloat16`, `fp16` -> `float16`, пусто -> умолчание.
 
     Один и тот же канон используется и в ключе кэша, и в сверке сайдкара, поэтому
-    `--set encoder.dtype=bf16` и `--set encoder.dtype=bfloat16` не дают промаха.
+    `--set encoder.qwen3vl.dtype=bf16` и `--set encoder.qwen3vl.dtype=bfloat16` не дают промаха.
     """
     value = str(dtype or "").strip().lower() or DEFAULT_ENCODER_DTYPE
     return _DTYPE_ALIASES.get(value, value)
@@ -368,10 +368,10 @@ class EncoderConfig:
     """Текст-энкодер. `cache_tag` — часть ключа кэша эмбеддингов.
 
     `device` — где считать энкод: `"auto"` (умолчание) разрешается в `cuda`, если она доступна,
-    иначе в `cpu`; явные `--set encoder.device=cpu|cuda` продолжают работать как раньше. При
+    иначе в `cpu`; явные `--set encoder.qwen3vl.device=cpu|cuda` продолжают работать как раньше. При
     `auto`+cuda `resolved()` дополнительно включает GPU-стриминг (`stream=True`, `prefetch=4`):
     веса 17.5 ГБ не влезают в 16 ГБ VRAM целиком, но влезает один модуль (`qwenstyle/streaming.py`).
-    CPU-эскапей — явный `--set encoder.device=cpu` (именно он даёт легаси-имя записи кэша).
+    CPU-эскапей — явный `--set encoder.qwen3vl.device=cpu` (именно он даёт легаси-имя записи кэша).
 
     `stream` — читать веса по слоям с диска (модель больше RAM), см. `qwenstyle/streaming.py`.
     На ключ кэша НЕ влияет — это раскладка памяти, а не математика.
@@ -644,7 +644,7 @@ class RunConfig:
         Pin — это транспорт (скорость копирования H2D), а не математика: результат бит-в-бит
         от него не зависит и ключ кэша эмбеддингов не меняется. Поэтому он включён по умолчанию
         **и при `offload=group`**, а выключает его только явное `encoder.pin_memory: false`
-        (`--set encoder.pin_memory=0`). Если pinned-аллокация всё-таки не удалась (чужая машина,
+        (`--set encoder.qwen3vl.pin_memory=0`). Если pinned-аллокация всё-таки не удалась (чужая машина,
         WDDM), `streaming._PinnedPool` деградирует до pageable RAM, печатает причину и
         продолжает — кадр от этого не меняется.
         """

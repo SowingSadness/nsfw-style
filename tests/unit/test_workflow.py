@@ -12,8 +12,9 @@
    «шаблоны копируют», устаревшие секции `RunConfig` — с подсказкой про кубики;
 2. `cubes` непустой, дубликат `id` — ошибка, неизвестный `id` — ошибка со списком известных;
 3. `run`: `seeds` и `count` взаимоисключающие, политика кэша из домена, `seeds` строкой/списком;
-4. `--set`: новые пути (`encoder.qwen3vl.device`) и все старые написания из `LEGACY_PATHS`
-   попадают в **тот же** параметр кубика; неизвестный ключ даёт список доступных путей;
+4. `--set`: единственное написание — путь параметра кубика (`encoder.qwen3vl.device`);
+   старые (`generation.steps`, `generation.sampler_kwargs.*`, `upscale.tile`) отвергаются со
+   списком допустимых;
 5. `inputs` — только то, что никто не производит (полный воркфлоу = пусто);
 6. обратная проекция `config_mapping()` восстанавливает `RunConfig` (переходный режим);
    внешними входами могут быть только `prompt`/`refs` — латент и канвас производит композиция;
@@ -34,7 +35,6 @@ sys.dont_write_bytecode = True
 import yaml                                                             # noqa: E402
 
 from qwenstyle.config import RunConfig                                  # noqa: E402
-from qwenstyle.preset_paths import LEGACY_PATHS                         # noqa: E402
 from qwenstyle.runspec import RunSpec                                   # noqa: E402
 from qwenstyle.workflow import Workflow, load, load_template, parse      # noqa: E402
 
@@ -162,24 +162,19 @@ def case_set_new_paths() -> None:
     assert changed.run.seeds == (1, 2, 3), changed.run.seeds
 
 
-def case_set_legacy_paths() -> None:
-    """Каждое старое написание из таблицы даёт тот же параметр, что и новое."""
+def case_set_rejects_old_spellings() -> None:
+    """Старых написаний нет: `--set generation.steps=8` отвергается списком канонических путей."""
     workflow = parse({"version": 1, "cubes": [dict(c) for c in CUBES]})
-    for old, new in LEGACY_PATHS.items():
-        if old in ("generation.precision_cache", "upscale.weights", "resolution"):
-            continue                       # эти кубики в примере без параметров: ниже отдельно
-        cube_id, _, param = new.rpartition(".")
+    for old in ("generation.steps", "generation.kv_cache",
+                "generation.sampler_kwargs.offload_blocks", "generation.sampler_kwargs.ref_px",
+                "encoder.device", "upscale.target_height", "size_px"):
         try:
-            applied = workflow.apply_sets([f"{old}=X"])
-        except ValueError:
-            continue                       # параметра нет в этом кубике — проверим набором путей
-        assert param in params_of(applied, cube_id), (old, new, params_of(applied, cube_id))
-    # старое написание через sampler_kwargs доходит до кубика декодера
-    legacy = workflow.apply_sets(["generation.sampler_kwargs.vae_tile_px=2048"])
-    assert params_of(legacy, "decoder.vae.qwen21")["tile_px"] == 2048, legacy
-    # и до геометрии
-    legacy = workflow.apply_sets(["generation.sampler_kwargs.ref_px=960"])
-    assert params_of(legacy, "source.frame")["ref_crop_side"] == 960, legacy
+            workflow.apply_sets([f"{old}=1"])
+        except ValueError as exc:
+            assert "допустимые пути" in str(exc), exc
+            assert "transformer.qwen_image21.steps" in str(exc), exc
+        else:                                                       # pragma: no cover
+            raise AssertionError(f"{old} обязан отвергаться")
 
 
 def case_set_unknown_lists_paths() -> None:
@@ -272,7 +267,7 @@ CASES = [
     ("проверка cubes", case_cubes_validation),
     ("RunSpec: seeds/count/домены", case_run_spec),
     ("--set: новые пути", case_set_new_paths),
-    ("--set: старые написания", case_set_legacy_paths),
+    ("--set: старые написания отвергаются", case_set_rejects_old_spellings),
     ("--set: неизвестный ключ", case_set_unknown_lists_paths),
     ("обратная проекция в RunConfig", case_config_mapping_roundtrip),
     ("load и шаблоны", case_load_and_templates),

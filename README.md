@@ -187,7 +187,7 @@ python -m qwenstyle gen [--preset PRESET] [--prompt NAME | --project PATH]
 | `--seeds SPEC` | явные сиды: `84`, `32-38`, `1,7,42`; без обоих флагов — один случайный сид |
 | `--aspect R` | пропорция кадра (`16:9`, `4:3`, `1:1`) вместо пропорции первого референса; для T2I без флага — `1:1` |
 | `--upscale F\|null` | число — множитель апскейла (`target_height` пресета главнее); `null`/`none`/`off` — выключить апскейл целиком (native-кадр, без `<seed>-<steps>-gen.png`) |
-| `--set KEY=VALUE` | точечный параметр `RunConfig` (можно повторять); неизвестный ключ отбивается кодом 2 со списком допустимых параметров бекенда |
+| `--set KEY=VALUE` | параметр кубика путём его параметра (`transformer.qwen_image21.steps=8`, `encoder.qwen3vl.device=cpu`, `source.frame.height=1088`); можно повторять, полный список — `python -m qwenstyle cubes show <id>` |
 | `--dry-run` | только план: сетка, ключ кэша эмбеддингов, будет ли энкод, апскейл, папка сессии; веса не грузятся |
 | `--no-logs` | не писать `<кадр>.log` (кадры и `meta.json` сессии остаются) |
 
@@ -257,7 +257,7 @@ python -m qwenstyle gen [--preset PRESET] [--prompt NAME | --project PATH]
 `VRAM12-release*` и `VRAM16-release*`). `factor: 0` сам по себе апскейл **не выключает** —
 `target_height` пресета главнее, поэтому `--upscale 0` при `upscale.target_height: 1440` всё равно
 гонит ESRGAN (1440 / 1088 → ×1.32); выключить — `--upscale=null` или
-`--set upscale.target_height=0`. Пары `<seed>-<steps>-gen.png` появляются только при включённом апскейле:
+`--set post.upscale.esrgan.target_height=0`. Пары `<seed>-<steps>-gen.png` появляются только при включённом апскейле:
 u `VRAM8-release*`, `VRAM16-4k-fast`, `VRAM16-r3-*` и при явном `--upscale F`.
 
 ## KV-кеш референсов (`kv_cache`)
@@ -293,8 +293,8 @@ u `VRAM8-release*`, `VRAM16-4k-fast`, `VRAM16-r3-*` и при явном `--upsc
 - **Порог — не разрешение, а объём префикса** (`≈1230 токенов текста + референсы × токены кадра`):
   на 768p один референс (префикс 5358) влезает, два (9492) — уже нет.
 - `offload` не меняет картинку: пара `true`/`offload` на одном seed даёт **побайтно тот же** PNG.
-- Переопределить: `--set generation.kv_cache=offload` (или `true`/`false`), в пресете —
-  `generation.kv_cache: …`. Старый путь `generation.sampler_kwargs.kv_cache` удалён.
+- Переопределить: `--set strategy.kv_offload.mode=offload` (или `true`/`false`), в пресете —
+  `strategy.kv_offload.mode: …`.
 
 ## Скользящее окно внимания (`window_attn_px`)
 
@@ -304,9 +304,9 @@ u `VRAM8-release*`, `VRAM16-4k-fast`, `VRAM16-r3-*` и при явном `--upsc
 швов не бывает по построению. Это не тайловый денойзинг: модель не запускается по кускам.
 
 ```text
---set generation.sampler_kwargs.window_attn_px=384        # высота полосы, px (0 = выкл)
---set generation.sampler_kwargs.window_attn_margin_px=384 # запас строк сверху/снизу
---set generation.sampler_kwargs.ref_px=960                # сетка референсов вместо канваса
+--set strategy.window_attention.window_attn_px=384        # высота полосы, px (0 = выкл)
+--set strategy.window_attention.window_attn_margin_px=384 # запас строк сверху/снизу
+--set source.frame.ref_crop_side=960                # сетка референсов вместо канваса
 ```
 
 **Гейт корректности:** если `window_attn_px` ≥ высоты канваса, остаётся одна полоса = штатное
@@ -377,9 +377,9 @@ u `VRAM8-release*`, `VRAM16-4k-fast`, `VRAM16-r3-*` и при явном `--upsc
 ```bash
 # 1792p, полоса 384 с запасом 384 (покрытие 64 %), референсы на сетке 960p
 python -m qwenstyle gen --preset VRAM16-release --prompt my-scene --aspect 16:9 --seeds 84 \
-  --set size_px=1792 --set generation.sampler_kwargs.ref_px=960 \
-  --set generation.sampler_kwargs.window_attn_px=384 \
-  --set generation.sampler_kwargs.window_attn_margin_px=384
+  --set size_px=1792 --set source.frame.ref_crop_side=960 \
+  --set strategy.window_attention.window_attn_px=384 \
+  --set strategy.window_attention.window_attn_margin_px=384
 ```
 
 ## Сборка пайплайна из кубиков

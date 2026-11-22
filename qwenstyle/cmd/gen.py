@@ -668,8 +668,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                         help="пропорция кадра (по умолчанию — пропорция первого референса; "
                              "для T2I без флага — 1:1)")
     source.add_argument("--set", dest="sets", action="append", default=[], metavar="KEY=VALUE",
-                        help="точечный параметр RunConfig, например generation.steps=8 "
-                             "(можно повторять)")
+                        help="параметр кубика путём его параметра, например "
+                             "transformer.qwen_image21.steps=8 или source.frame.height=1088 "
+                             "(можно повторять; список — `cubes show <id>`)")
     source.add_argument("--upscale", type=str, default=None, metavar="F|null",
                         help=UPSCALE_HELP)
     source.add_argument("--cache-dir", dest="cache_dir", default=None, metavar="DIR",

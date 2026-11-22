@@ -59,7 +59,8 @@ STAMP_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\] ")
 PROGRESS_RE = re.compile(r"\d+%\|")
 #: Логичная и дешёвая сессия `gen`: 480p, один шаг, без апскейла (у `VRAM12-preview` его нет).
 GEN_PRESET = "VRAM12-preview"
-GEN_SETS = ("size_px=480", "generation.steps=1", "cache_supersede=none")
+GEN_SETS = ("source.frame.height=480", "transformer.qwen_image21.steps=1",
+            "cache_supersede=none")
 
 
 def _frame(out: str) -> Path:

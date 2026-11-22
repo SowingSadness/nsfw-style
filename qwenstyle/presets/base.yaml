@@ -7,7 +7,7 @@
 encoder:
   # Дефолтный энкодер — Heretic-1.3.0 (D7): именно на его conditioning обучался LoRA, так что
   # он ближе к трейну, чем штатный Qwen3VL-8B. Откат к штатному — `--text-encoder base`
-  # (или `--set encoder.name=base`): это другая запись кэша (`_te-heretic` vs без тега).
+  # (или `--set encoder.qwen3vl.name=base`): это другая запись кэша (`_te-heretic` vs без тега).
   # `VRAM*`-пресеты наследуют `base`; энкодер здесь — heretic по умолчанию.
   name: heretic
   cache_tag: heretic       # -> в имени кэша эмбеддингов сегмент _te-heretic
@@ -19,7 +19,7 @@ encoder:
   requires_vision: true
   dtype: bfloat16
   # `auto` = GPU, если CUDA доступна (и тогда же включается стриминг весов + prefetch=4),
-  # иначе CPU. CPU — только явным `--set encoder.device=cpu` (он же даёт легаси-имя кэша).
+  # иначе CPU. CPU — только явным `--set encoder.qwen3vl.device=cpu` (он же даёт легаси-имя кэша).
   device: auto
 
 generation:
@@ -39,7 +39,7 @@ generation:
   # Префиксный KV-кеш (K/V текста и референсов, считается на шаге 0): `auto-offload-ref2` — один
   # референс с `true` влезает (768p: 15.2 ГиБ, 14 с), два — OOM (префикс 4.6 ГиБ), поэтому при 2+
   # кеш уезжает в RAM (`offload`, ~+13 % времени). Значения: true|offload|false|auto-offload-ref2.
-  # Замеры: docs/bench/kv-cache-offload.md. Переопределение: `--set generation.kv_cache=…`.
+  # Замеры: docs/bench/kv-cache-offload.md. Переопределение: `--set strategy.kv_offload.mode=…`.
   kv_cache: auto-offload-ref2
   sampler_kwargs: {}
 

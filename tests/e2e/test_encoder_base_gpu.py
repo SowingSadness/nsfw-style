@@ -10,7 +10,7 @@
 
 Кейсы:
 
-1. **cpu — эталон имени.** `--set encoder.device=cpu` даёт ровно историческое имя записи
+1. **cpu — эталон имени.** `--set encoder.qwen3vl.device=cpu` даёт ровно историческое имя записи
    `embeds_<md5>_<sha>_1376x768.pt` (иначе старые CPU-записи в `cache/` стали бы мёртвыми, R1).
 2. **cuda в имени.** `encoder.device=cuda` -> `-dev-cuda` в имени и `encoder_device: cuda`
    в `cache_key_parts` (GPU-энкод != CPU-энкод по округлениям, R1).
@@ -19,7 +19,7 @@
 4. **мини-модель на GPU.** `streaming.load_text_encoder(device="cuda")` отдаёт модель с
    `model.device.type == "cuda"`, пустыми параметрами на cuda и logits **бит-в-бит** как у
    обычной загрузки на ту же карту (стриминг — раскладка памяти, а не другая математика).
-5. **`--set encoder.device=cpu` возвращает старое поведение.** Устройство `cpu`, `stream`/`prefetch`
+5. **`--set encoder.qwen3vl.device=cpu` возвращает старое поведение.** Устройство `cpu`, `stream`/`prefetch`
    не включаются, имя записи — прежнее; и это ровно то, что читает бекенд (`_encoder_device`).
 
 Кейсы 3-4 требуют CUDA: без неё печатают `SKIP` и не считаются провалом (exit 0).
@@ -255,11 +255,11 @@ def case_mini_encoder_cuda(tmp: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Кейс 5: `--set encoder.device=cpu` — старое поведение
+# Кейс 5: `--set encoder.qwen3vl.device=cpu` — старое поведение
 # --------------------------------------------------------------------------- #
 
 def case_escape_cpu(tmp: Path) -> None:
-    """`--set encoder.device=cpu` даёт прежний конфиг и прежнее имя записи (обратная совместимость)."""
+    """`--set encoder.qwen3vl.device=cpu` даёт прежний конфиг и прежнее имя записи (обратная совместимость)."""
     from qwenstyle.backends.qwen_image21 import _encoder_device
 
     profile = _pinned_base()
@@ -269,10 +269,10 @@ def case_escape_cpu(tmp: Path) -> None:
         raise AssertionError(f"_encoder_device(профиль auto)={_encoder_device(profile)!r}, "
                              f"ожидалось {auto_encoder_device()!r}")
     if _encoder_device(explicit) != "cpu":
-        raise AssertionError(f"_encoder_device(--set encoder.device=cpu)="
+        raise AssertionError(f"_encoder_device(--set encoder.qwen3vl.device=cpu)="
                              f"{_encoder_device(explicit)!r}")
     if _encoder_device(forced) != "cuda":
-        raise AssertionError(f"_encoder_device(--set encoder.device=cuda)="
+        raise AssertionError(f"_encoder_device(--set encoder.qwen3vl.device=cuda)="
                              f"{_encoder_device(forced)!r}")
     if explicit.embeds_key(CROP, MD5, SHA) != LEGACY_NAME:
         raise AssertionError(f"cpu-эскапей изменил имя записи: "
@@ -280,7 +280,7 @@ def case_escape_cpu(tmp: Path) -> None:
     parts = explicit.cache_key_parts(CROP, MD5, SHA)
     if parts["encoder_device"] != "cpu":
         raise AssertionError(f"cache_key_parts[encoder_device]={parts['encoder_device']!r}")
-    print(f"  ok: --set encoder.device=cpu -> поведение и имя записи прежние ({LEGACY_NAME})")
+    print(f"  ok: --set encoder.qwen3vl.device=cpu -> поведение и имя записи прежние ({LEGACY_NAME})")
 
 
 # --------------------------------------------------------------------------- #
@@ -291,7 +291,7 @@ CASES: tuple[tuple[str, Callable[[Path], None]], ...] = (
     ("3. auto -> cuda (stream=True, prefetch=4) без импорта torch при сборке конфига",
      case_auto_device),
     ("4. мини-модель через streaming.load_text_encoder(device=cuda)", case_mini_encoder_cuda),
-    ("5. --set encoder.device=cpu -> старое поведение и старое имя записи", case_escape_cpu),
+    ("5. --set encoder.qwen3vl.device=cpu -> старое поведение и старое имя записи", case_escape_cpu),
 )
 
 

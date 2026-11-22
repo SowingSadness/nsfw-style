@@ -151,7 +151,13 @@ RULES: tuple[Rule, ...] = (
         why="проекция RunConfig -> кубики и печать `config show --cubes`",
     ),
     Rule(
-        paths=("qwenstyle/workflow.py", "qwenstyle/runspec.py", "qwenstyle/preset_paths.py"),
+        paths=("qwenstyle/paths.py",),
+        tests=("unit/test_paths.py",),
+        tags=frozenset({"contract"}),
+        why="канонические пути --set: реальность целей, перевод в RunConfig, отказ старым",
+    ),
+    Rule(
+        paths=("qwenstyle/workflow.py", "qwenstyle/runspec.py"),
         tests=("unit/test_workflow.py",),
         tags=frozenset({"contract"}),
         why="файл воркфлоу: версия, запрет наследования, --set по путям кубиков, RunSpec",
