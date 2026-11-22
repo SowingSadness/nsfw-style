@@ -196,6 +196,13 @@ def case_set_unknown_lists_paths() -> None:
         assert "key=value" in str(exc), exc
     else:                                                           # pragma: no cover
         raise AssertionError("--set без `=` обязан отвергаться")
+    # снятые ключи дают подсказку, а не «неизвестный ключ»
+    try:
+        workflow.apply_sets(["resolution=1024"])
+    except ValueError as exc:
+        assert "source.frame" in str(exc), exc
+    else:                                                           # pragma: no cover
+        raise AssertionError("resolution обязан давать подсказку")
 
 
 def case_config_mapping_roundtrip() -> None:

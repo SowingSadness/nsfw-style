@@ -121,6 +121,11 @@ class Workflow:
             index, name, spec = target
             cubes[index][name] = _coerce(value, spec.type)
         if unknown:
+            from .preset_paths import REMOVED_PATHS
+
+            hints = [f"{key}: {REMOVED_PATHS[key]}" for key in unknown if key in REMOVED_PATHS]
+            if hints:
+                raise ValueError("--set: эти ключи больше не параметры — " + "; ".join(hints))
             available = sorted({f"{cube_id}.{param.name}" for cube_id in ids
                                 for param in get_cube(cube_id).params})
             raise ValueError(f"--set: неизвестные ключи {unknown}; допустимые пути: "

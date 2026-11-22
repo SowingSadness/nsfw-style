@@ -11,7 +11,7 @@ generation.sampler_kwargs.offload_blocks=4` встречаются в докум
 """
 from __future__ import annotations
 
-__all__ = ["LEGACY_PATHS", "SAMPLER_PREFIX", "canonical"]
+__all__ = ["LEGACY_PATHS", "REMOVED_PATHS", "SAMPLER_PREFIX", "canonical"]
 
 #: Префикс старых «свободных» параметров модели (`generation.sampler_kwargs.*`).
 SAMPLER_PREFIX = "generation.sampler_kwargs."
@@ -61,7 +61,23 @@ LEGACY_PATHS: dict[str, str] = {
     "upscale.color_sigma": "post.colorfix.sigma",
     # -- геометрия кадра -------------------------------------------------------------- #
     "size_px": "source.frame.height",
-    "resolution": "source.frame.resolution",
+}
+
+#: Устаревшие пути **без** замены на параметр кубика: значение задаёт не параметр, а структура
+#: (канвас теперь задаётся width/height, а не площадью `resolution`). Держим их здесь, чтобы
+#: `--set resolution=1024` давал понятную подсказку, а не «неизвестный ключ».
+REMOVED_PATHS: dict[str, str] = {
+    "resolution": "канвас задаётся явно: source.frame.width / source.frame.height "
+                  "(0 = авто по референсу)",
+    "aspect": "пропорция выражается шириной и высотой: source.frame.width / height",
+    "generation.precision": "точность — это наличие стратегии: strategy.precision.fp8 "
+                            "(есть кубик = fp8, нет = bf16)",
+    "generation.backend": "модель выбирается кубиком: transformer.qwen_image21",
+    "generation.transformer": "переопределение трансформера: transformer.qwen_image21."
+                              "transformer_repo / transformer_subfolder",
+    "generation.lora.strip_alpha": "transformer.qwen_image21.lora_strip_alpha",
+    "upscale.backend": "бекенд апскейла — это кубик: post.upscale.esrgan / post.upscale.seedvr2",
+    "encoder.requires_vision": "не нужен: тип энкодера объявлен кубиком encoder.qwen3vl",
 }
 
 
