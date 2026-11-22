@@ -39,9 +39,12 @@ class TransformerParams:
     revision: str | None = None
     steps: int = 25
     guidance: float = 1.0
+    transformer_repo: str = ""          # turbo: свой трансформер из другого репозитория
+    transformer_subfolder: str = "transformer"
     lora_repo: str = ""
     lora_file: str = ""
     lora_scale: float = 0.0
+    lora_strip_alpha: bool = False      # turbo R128: 224 per-module alpha вырезаются
     offload: str = "none"
     offload_blocks: int = 1
     offload_stream: bool = True
@@ -59,9 +62,12 @@ class TransformerParams:
         return cls(backend=str(values["backend"]), repo=str(values["repo"]),
                    revision=None if values["revision"] in (None, "") else str(values["revision"]),
                    steps=int(values["steps"]), guidance=float(values["guidance"]),
+                   transformer_repo=str(values["transformer_repo"] or ""),
+                   transformer_subfolder=str(values["transformer_subfolder"] or "transformer"),
                    lora_repo=str(values["lora_repo"] or ""),
                    lora_file=str(values["lora_file"] or ""),
                    lora_scale=float(values["lora_scale"] or 0.0),
+                   lora_strip_alpha=bool(values["lora_strip_alpha"]),
                    offload=str(values["offload"]),
                    offload_blocks=int(values["offload_blocks"]),
                    offload_stream=bool(values["offload_stream"]))
@@ -76,7 +82,8 @@ def lora_of(params: TransformerParams) -> dict[str, Any] | None:
     """LoRA в форме `config.LoraConfig` (или `None`, если адаптер не задан)."""
     if not params.has_lora:
         return None
-    return {"repo": params.lora_repo, "filename": params.lora_file, "scale": params.lora_scale}
+    return {"repo": params.lora_repo, "filename": params.lora_file,
+            "scale": params.lora_scale, "strip_alpha": params.lora_strip_alpha}
 
 
 def verify(params: TransformerParams) -> None:
@@ -159,6 +166,12 @@ CUBE: CubeSpec = register_cube(CubeSpec(
                           "расписанию sample_sigmas)"),
         ParameterSpec("guidance", "generation", "float", 1.0, minimum=0.0, maximum=10.0,
                       doc="true_cfg_scale; при 1.0 CFG-ветки нет (negative_prompt игнорируется)"),
+        ParameterSpec("transformer_repo", "cube", "str", "",
+                      doc="свой трансформер из другого репозитория (turbo); пусто = из repo"),
+        ParameterSpec("transformer_subfolder", "cube", "str", "transformer",
+                      doc="подкаталог трансформера внутри transformer_repo"),
+        ParameterSpec("lora_strip_alpha", "cube", "bool", False,
+                      doc="вырезать per-module alpha адаптера (turbo R128) перед загрузкой"),
         ParameterSpec("lora_repo", "cube", "str", "",
                       doc="репозиторий LoRA-адаптера (FUSAL R80); пусто = без адаптера"),
         ParameterSpec("lora_file", "cube", "str", "",

@@ -236,7 +236,10 @@ def _inputs_of(bindings: list[CubeBinding]) -> frozenset[str]:
     produced = {port for binding in bindings for port in get_cube(binding.cube_id).outputs}
     needed = {port for binding in bindings
               for port in (get_cube(binding.cube_id).consumes | get_cube(binding.cube_id).reads)}
-    return frozenset(needed - produced)
+    # Внешними могут быть только входные порты файла (`prompt`, `refs`): латент/канвас/кадр
+    # обязаны производиться кубиками, иначе композиция бессмысленна — пусть компоновщик скажет
+    # `port_missing`, а не сделает вид, что латент кто-то подаст снаружи.
+    return frozenset((needed - produced) & {"prompt", "refs"})
 
 
 def _where(path: Path | None) -> str:

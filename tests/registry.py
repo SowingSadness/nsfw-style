@@ -157,6 +157,12 @@ RULES: tuple[Rule, ...] = (
         why="файл воркфлоу: версия, запрет наследования, --set по путям кубиков, RunSpec",
     ),
     Rule(
+        paths=("qwenstyle/cmd/workflow.py",),
+        tests=("unit/test_workflow_cli.py",),
+        tags=frozenset({"contract"}),
+        why="CLI воркфлоу: check/show/new без весов",
+    ),
+    Rule(
         paths=("qwenstyle/cmd/cubes.py", "qwenstyle/cmd/compose.py"),
         tests=("unit/test_cubes_cli.py",),
         tags=frozenset({"contract"}),

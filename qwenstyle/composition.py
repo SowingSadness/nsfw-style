@@ -137,9 +137,13 @@ def spec_of(cfg: Any, *, name: str = "") -> PipelineSpec:
             "revision": gen.revision or "",
             "steps": int(cfg.steps),
             "guidance": float(gen.guidance),
+            "transformer_repo": (gen.transformer[0] if gen.transformer else ""),
+            "transformer_subfolder": (gen.transformer[1] if gen.transformer
+                                      else "transformer"),
             "lora_repo": lora.repo if lora else "",
             "lora_file": lora.filename if lora else "",
             "lora_scale": float(lora.scale) if lora else 0.0,
+            "lora_strip_alpha": bool(lora.strip_alpha) if lora else False,
             "offload": gen.offload,
             "offload_blocks": int(_sampler(cfg, "offload_blocks", 1) or 1),
             "offload_stream": bool(_sampler(cfg, "offload_stream", True)),
@@ -216,8 +220,10 @@ def config_mapping_of(pipeline: PipelineSpec, run: "Any" = None) -> dict[str, An
     upscale: dict[str, Any] = {}
 
     for binding in pipeline.cubes:
-        params = dict(binding.params)
         cube_id = binding.cube_id
+        # эффективные параметры: объявленные умолчания кубика + то, что написано в файле
+        params = {param.name: param.default for param in get_cube(cube_id).params}
+        params.update(binding.params)
         if cube_id == "source.frame":
             width = int(params.get("width") or 0)
             height = int(params.get("height") or 0)
@@ -257,10 +263,15 @@ def config_mapping_of(pipeline: PipelineSpec, run: "Any" = None) -> dict[str, An
             generation["offload"] = params.get("offload")
             sampler["offload_blocks"] = int(params.get("offload_blocks") or 1)
             sampler["offload_stream"] = bool(params.get("offload_stream", True))
-            if params.get("lora_scale"):
+            if params.get("transformer_repo"):
+                generation["transformer"] = (str(params["transformer_repo"]),
+                                             str(params.get("transformer_subfolder")
+                                                 or "transformer"))
+            if params.get("lora_repo") and params.get("lora_file"):
                 generation["lora"] = {"repo": params.get("lora_repo") or "",
                                       "filename": params.get("lora_file") or "",
-                                      "scale": float(params["lora_scale"])}
+                                      "scale": float(params["lora_scale"]),
+                                      "strip_alpha": bool(params.get("lora_strip_alpha"))}
             else:
                 generation["lora"] = None
         elif cube_id == "decoder.vae.qwen21":

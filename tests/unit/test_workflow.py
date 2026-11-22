@@ -16,6 +16,7 @@
    попадают в **тот же** параметр кубика; неизвестный ключ даёт список доступных путей;
 5. `inputs` — только то, что никто не производит (полный воркфлоу = пусто);
 6. обратная проекция `config_mapping()` восстанавливает `RunConfig` (переходный режим);
+   внешними входами могут быть только `prompt`/`refs` — латент и канвас производит композиция;
 7. `load_template` находит шаблон по имени и просит модель при неоднозначности.
 """
 from __future__ import annotations
@@ -80,8 +81,11 @@ def case_partial_workflow_needs_inputs() -> None:
         {"id": "decoder.vae.qwen21"},
         {"id": "decoder.postprocess.image"},
     ]})
-    assert workflow.pipeline.inputs == frozenset({"prompt", "refs", "frame"}), \
+    assert workflow.pipeline.inputs == frozenset({"prompt", "refs"}), \
         workflow.pipeline.inputs
+    # `frame` внешним быть не может: канвас обязаны произвести кубики (`source.frame`)
+    composition = workflow.composition()
+    assert "port_missing" in [issue.code for issue in composition.issues], composition.issues
 
 
 def case_version_and_forbidden() -> None:

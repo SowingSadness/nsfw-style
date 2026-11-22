@@ -262,6 +262,53 @@ def seeds_text(seeds: list[int]) -> str:
 # Конфиг
 # --------------------------------------------------------------------------- #
 
+def _workflow_spec(path: str) -> tuple[project.ProjectSpec, Any]:
+    """Файл воркфлоу -> «проектная» спецификация для существующего пути `gen`.
+
+    Переходный режим (план `workflow-layout`, шаг 3): композиция переводится обратной проекцией в
+    `RunConfig`, а промт/референсы/out берутся из кубиков `source.*` и секции `run`. Так новый файл
+    и старый `project.yaml` идут через один прогон, и паритет кадра сохраняется.
+
+    За пределами до плана `cutover`: PE-кубик (`rewrite.*`) в рантайм не подключён, его параметры в
+    `RunConfig` не переводятся; `Image1…Image10` должны существовать на диске.
+    """
+    from ..workflow import load as load_workflow
+
+    workflow = load_workflow(path)
+    base_dir = workflow.base_dir
+    prompt_file = ""
+    images: list[str] = []
+    for binding in workflow.pipeline.cubes:
+        if binding.cube_id != "source.txtFileImage":
+            continue
+        prompt_file = str(binding.params.get("prompt") or "")
+        images = [str(binding.params[f"Image{index}"]) for index in range(1, 11)
+                  if binding.params.get(f"Image{index}")]
+    if not prompt_file:
+        raise ConfigError(f"{Path(path).as_posix()}: в воркфлоу нет кубика source.txtFileImage "
+                          f"с параметром prompt")
+    prompt_path = _resolve_from(base_dir, prompt_file)
+    if not prompt_path.suffix:
+        prompt_path = prompt_path.with_suffix(".txt")
+    out_dir = _resolve_from(base_dir, workflow.run.out or "out")
+    data = workflow.config_mapping()
+    data.pop("preset", None)                      # композиция самодостаточна, пресет не нужен
+    tag = prompt_path.stem
+    spec = project.ProjectSpec(
+        path=workflow.path, preset="base",
+        prompt=project.ProjectPrompt(project_dir=base_dir, prompt_file=prompt_path,
+                                     prompt_stem=tag, tag=project.tag_for(tag, base_dir)),
+        refs_dir=None, out_dir=out_dir, seeds=workflow.run.seed_spec() or None,
+        count=workflow.run.count, config=data, base_dir=base_dir)
+    return spec, workflow
+
+
+def _resolve_from(base_dir: Path, raw: str) -> Path:
+    """Путь из параметров воркфлоу: относительный считается от каталога файла."""
+    path = Path(raw)
+    return path if path.is_absolute() else (Path(base_dir) / path)
+
+
 def build_config(args: argparse.Namespace, *, spec: project.ProjectSpec | None,
                  prompt: project.ProjectPrompt, images: list[Path], seeds: list[int],
                  session: Path) -> tuple[RunConfig, dict[str, Any]]:
@@ -494,7 +541,11 @@ def run(args: argparse.Namespace) -> int:
     try:
         project_path: Path | None = None
         spec: project.ProjectSpec | None = None
-        if getattr(args, "project", None):
+        workflow_obj: Any = None
+        if getattr(args, "workflow", None):
+            spec, workflow_obj = _workflow_spec(args.workflow)
+            project_path = workflow_obj.path
+        elif getattr(args, "project", None):
             project_path = project.resolve_project(args.project)
             spec = project.load_project(project_path)
 
@@ -513,7 +564,16 @@ def run(args: argparse.Namespace) -> int:
         out_dir = (Path(args.out) if getattr(args, "out", None)
                    else (spec.out_dir if spec is not None and spec.out_dir is not None
                          else prompt.project_dir / project.DEFAULT_OUT_DIR))
-        images = project.discover_refs(refs_dir)
+        if workflow_obj is not None:
+            # явные Image1…ImageN из файла воркфлоу: порядок задан автором, каталог не сканируем
+            images = [_resolve_from(workflow_obj.base_dir, raw) for binding in
+                      workflow_obj.pipeline.cubes if binding.cube_id == "source.txtFileImage"
+                      for raw in (str(binding.params.get(f"Image{index}"))
+                                  for index in range(1, 11))
+                      if raw and raw != "None"]
+            refs_dir = workflow_obj.base_dir
+        else:
+            images = project.discover_refs(refs_dir)
         seeds = resolve_seeds(getattr(args, "seeds", None), getattr(args, "count", None), spec)
         session = project.session_dir(out_dir, prompt.tag)
         cfg, _ = build_config(args, spec=spec, prompt=prompt, images=images,
@@ -598,6 +658,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
                         help=f"project.yaml (файл, каталог или имя проекта в "
                              f"{project.PROMPT_ROOT}/): preset + любые поля RunConfig поверх него; "
                              f"флаги CLI главнее yaml")
+    source.add_argument("--workflow", default=None, metavar="PATH",
+                        help="workflow.yaml (самодостаточное описание пайплайна: cubes + run); "
+                             "переходный режим — композиция переводится в RunConfig, прогон тот же")
     source.add_argument("--out", default=None, metavar="DIR",
                         help="каталог сессий (по умолчанию <project>/out); сессия — "
                              "<YYYYMMDDHHMM>-<tag> внутри него")
