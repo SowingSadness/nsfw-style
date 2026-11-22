@@ -395,8 +395,10 @@ python -m qwenstyle cubes schema | --json          # JSON Schema (draft-07) дл
 python -m qwenstyle compose --spec pipeline.yaml --check   # проверить композицию из файла
 ```
 
-Цепочка кадра читается так: `source.project` (проект → `prompt`+`refs`) → `encoder.qwen3vl`
-(`prompt`+`refs` → `conditioning`) → `transformer.qwen_image21` (`conditioning` → `latents`,
+Цепочка кадра читается так: `source.frame` (канвас и сетка референсов → порт `frame`) +
+`source.txtFileImage` (промт из `.txt` и явные референсы `Image1…Image10` → `prompt`+`refs`) →
+`encoder.qwen3vl` (`prompt`+`frame` → `conditioning`, референсы читает) →
+`transformer.qwen_image21` (`conditioning`+`frame` → `latents`,
 требует стратегии `strategy.precision.fp8` и `strategy.kv_offload`) → `decoder.vae.qwen21`
 (`latents` → `frames`, тензор) → `decoder.postprocess.image` (`frames` → `pixels`) →
 `post.upscale.esrgan` / `post.colorfix` (`pixels` → `pixels`). Промежуточный порт `frames`
@@ -409,8 +411,10 @@ python -m qwenstyle compose --spec pipeline.yaml --check   # проверить 
 name: my-frame
 inputs: [prompt, refs]
 cubes:
-  - id: source.project
-    params: {dir: prompts/my-project, refs: refs}
+  - id: source.frame
+    params: {height: 768, width: 0, ref_crop_side: 0}
+  - id: source.txtFileImage
+    params: {prompt: prompt-qwen.txt, Image1: refs/01-input.png}
   - id: encoder.qwen3vl
   - id: strategy.precision.fp8
   - id: strategy.kv_offload

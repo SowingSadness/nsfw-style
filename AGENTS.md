@@ -108,10 +108,12 @@ sort), `prompt-<model>.txt`, опциональный `project.yaml` и `out/<YY
 `tests/run.py --tag unit|contract|cube|e2e`, `--changed <path>`, `--list`, `--map`);
 **Кубики (план `.pi/plans/cube-architecture.md`, шаги 1–6).** Пайплайн описан стадиями
 (`qwenstyle/cube.py` — контракт и реестр, `qwenstyle/compose.py` — компоновщик, `qwenstyle/cubes/*` —
-13 кубиков): `source.project` (проект -> prompt+refs) → `rewrite.pe_i2i|pe_t2i|pe_llamacpp`
-(prompt -> prompt) → `encoder.qwen3vl` (prompt+refs -> conditioning) → стратегии
+15 кубиков): `source.frame` (width/height/ref_crop_side → порт `frame`) и `source.txtFileImage`
+(промт из .txt + явные референсы `Image1…Image10` → `prompt`+`refs`) →
+`rewrite.pe_i2i|pe_t2i|pe_llamacpp`
+(prompt -> prompt) → `encoder.qwen3vl` (prompt+frame -> conditioning, читает refs) → стратегии
 `strategy.precision.fp8` / `strategy.kv_offload` / `strategy.window_attention` →
-`transformer.qwen_image21` (conditioning -> latents, `requires={fp8,kv_offload}`) →
+`transformer.qwen_image21` (conditioning+frame -> latents, `requires={fp8,kv_offload}`) →
 `decoder.vae.qwen21` (latents -> **frames**, тензор) → `decoder.postprocess.image` (frames -> pixels,
 `image_processor.postprocess`; видео — будущий `decoder.postprocess.video` на том же порту) →
 `post.upscale.esrgan|seedvr2`, `post.colorfix` (pixels -> pixels). Декод в прогоне идёт именно так:

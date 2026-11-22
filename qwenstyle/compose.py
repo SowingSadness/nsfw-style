@@ -186,6 +186,10 @@ def compose(spec: PipelineSpec, *, machine: Mapping[str, Any] | None = None) -> 
     bindings: list[tuple[str, dict[str, Any]]] = []
     stage_cursor = Stage.SOURCE.order - 1
     produced: set[str] = set()
+    # Последнее событие по порту: `produced` — порт никем не забран (значит, он и есть выход
+    # композиции), `consumed`/`read` — им уже воспользовались. Нужен из-за fan-out: `frame`
+    # производят один раз, а потребляют два кубика, поэтому «просто множество» тут врёт.
+    last_event: dict[str, str] = {}
 
     for binding in spec.cubes:
         try:
@@ -215,11 +219,20 @@ def compose(spec: PipelineSpec, *, machine: Mapping[str, Any] | None = None) -> 
         fresh = outputs - cube.consumes
         for port in sorted(fresh & produced):
             issues.append(Issue("port_duplicate", f"порт {port!r} уже произведён", cube.id))
-        available -= set(cube.consumes)
+        # Порт может потребляться **несколькими** кубиками (геометрия `frame` нужна и энкодеру, и
+        # трансформеру), поэтому потребление не изымает порт из `available`: оно лишь перестаёт
+        # считаться «неиспользованным». Дубликаты ловятся выше, по `produced`.
         consumed |= set(cube.consumes)
         read_ports |= set(cube.reads)
         available |= outputs
         produced |= fresh
+        for port in cube.consumes:
+            last_event[port] = "consumed"
+        for port in cube.reads:
+            # чтение уже произведённого порта = им воспользовались (иначе `refs` висел бы выходом)
+            last_event[port] = "consumed" if port in produced else "read"
+        for port in outputs:
+            last_event[port] = "produced"
 
         # стратегии
         unmet = sorted(cube.requires - provides)
@@ -266,7 +279,8 @@ def compose(spec: PipelineSpec, *, machine: Mapping[str, Any] | None = None) -> 
 
     return Composition(spec=spec, cubes=tuple(cube_specs), issues=tuple(issues),
                        ports_in=frozenset(spec.inputs),
-                       ports_out=frozenset(available) - read_ports,
+                       ports_out=frozenset(p for p, event in last_event.items()
+                                           if event == "produced"),
                        bindings=tuple(bindings), provides=frozenset(provides), budget_gib=budget)
 
 

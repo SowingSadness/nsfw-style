@@ -39,8 +39,10 @@ VALID = """\
 name: full-4k
 inputs: [prompt, refs]
 cubes:
-  - id: source.project
-    params: {dir: prompts/x, refs: refs-style}
+  - id: source.frame
+    params: {width: 2912, height: 2176, ref_crop_side: 768}
+  - id: source.txtFileImage
+    params: {prompt: prompt-qwen.txt, Image1: refs/a.png}
   - id: encoder.qwen3vl
   - id: strategy.precision.fp8
   - id: strategy.kv_offload
@@ -56,7 +58,8 @@ cubes:
 BROKEN = """\
 name: broken
 cubes:
-  - id: source.project
+  - id: source.frame
+  - id: source.txtFileImage
   - id: decoder.vae.qwen21
 """
 
@@ -78,7 +81,7 @@ def namespace(**kwargs) -> object:
 def case_list() -> None:
     code, text = capture(cubes_cmd.run, namespace(cubes_action="list", stage=None, json=False))
     assert code == 0, text
-    assert "decoder.postprocess.image" in text and "source.project" in text, text[:200]
+    assert "decoder.postprocess.image" in text and "source.frame" in text, text[:200]
     rows = [line for line in text.splitlines() if line.startswith("  ") and "." in line]
     assert len(rows) == len(all_cubes()), (len(rows), len(all_cubes()))
     code, payload = capture(cubes_cmd.run, namespace(cubes_action="list", stage=None, json=True))
@@ -175,9 +178,9 @@ def case_check_rejects_bad_file() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         cases = {
             "no_cubes.yaml": "name: x\n",
-            "unknown_key.yaml": "cubes: [{id: source.project}]\nextra: 1\n",
-            "bad_entry.yaml": "cubes: [source.project]\n",
-            "bad_params.yaml": "cubes: [{id: source.project, params: 5}]\n",
+            "unknown_key.yaml": "cubes: [{id: source.frame}]\nextra: 1\n",
+            "bad_entry.yaml": "cubes: [source.frame]\n",
+            "bad_params.yaml": "cubes: [{id: source.frame, params: 5}]\n",
         }
         for name, text in cases.items():
             path = Path(tmp) / name
@@ -193,7 +196,7 @@ def case_check_rejects_bad_file() -> None:
 def case_loader_defaults() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "p.yaml"
-        path.write_text("cubes:\n  - id: source.project\n", encoding="utf-8")
+        path.write_text("cubes:\n  - id: source.frame\n", encoding="utf-8")
         spec = cubes_cmd.load_pipeline_spec(str(path))
         assert spec.name == "p", spec.name
         assert spec.inputs == frozenset({"prompt", "refs"}), spec.inputs

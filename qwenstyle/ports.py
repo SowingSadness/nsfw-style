@@ -21,6 +21,7 @@ __all__ = [
     "PORT_TYPES",
     "Conditioning",
     "Frames",
+    "Frame",
     "Latents",
     "Pixels",
     "Prompt",
@@ -82,6 +83,27 @@ class Latents:
 
 
 @dataclass(frozen=True)
+class Frame:
+    """Геометрия кадра: канвас (в каком разрешении рисуем) и сетка референсов.
+
+    Зачем отдельный порт, а не параметр одного кубика (план `workflow-layout`): у геометрии два
+    независимых потребителя — **энкодер** (на какой сетке видит референсы) и **трансформер**
+    (канвас латентов). Постобработка (`post.upscale.*`) канвас не задаёт: у неё свои
+    `factor`/`target_height` и она работает с готовыми пикселями.
+
+    `width`/`height` = 0 означает «вывести из пропорции референса по другой стороне»:
+    `height=768, width=0` — прежний `--size 768p`. Оба нуля — квадрат 1024x1024 (T2I).
+    """
+
+    port: ClassVar[str] = "frame"
+
+    width: int = 0
+    height: int = 0
+    ref_crop_side: int = 0          # сторона сетки референсов по высоте кадра; 0 = сетка канваса
+    resolution: int = 0             # sqrt(width*height) для `output_resolution` пайплайна
+
+
+@dataclass(frozen=True)
 class Frames:
     """Тензор кадра после `vae.decode`, ещё **не** картинка.
 
@@ -114,7 +136,7 @@ class Pixels:
 
 #: Все объявленные порты. Композитор сверяет `consumes`/`produces`/`reads` с этим набором.
 PORT_TYPES: dict[str, type] = {
-    cls.port: cls for cls in (Prompt, RefImages, Conditioning, Latents, Frames, Pixels)
+    cls.port: cls for cls in (Prompt, RefImages, Frame, Conditioning, Latents, Frames, Pixels)
 }
 
 

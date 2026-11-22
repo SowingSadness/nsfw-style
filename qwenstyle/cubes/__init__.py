@@ -13,7 +13,8 @@ from . import post_seedvr2  # noqa: F401  — post.upscale.seedvr2
 from . import postprocess_image  # noqa: F401  — decoder.postprocess.image
 from . import rewrite_pe  # noqa: F401  — rewrite.pe_i2i, rewrite.pe_t2i
 from . import rewrite_pe_llamacpp  # noqa: F401  — rewrite.pe_llamacpp
-from . import source_project  # noqa: F401  — source.project
+from . import source_frame  # noqa: F401  — source.frame
+from . import source_txtimage  # noqa: F401  — source.txtFileImage
 from . import strategy_kv  # noqa: F401  — strategy.kv_offload
 from . import strategy_precision  # noqa: F401  — strategy.precision.fp8
 from . import strategy_window_attention  # noqa: F401  — strategy.window_attention
@@ -21,6 +22,5 @@ from . import transformer_qwen21  # noqa: F401  — transformer.qwen_image21
 
 __all__ = ["decoder_vae", "encoder_qwen3vl", "post_colorfix", "post_esrgan",
            "post_seedvr2", "postprocess_image", "rewrite_pe", "rewrite_pe_llamacpp",
-           "source_project",
-           "strategy_kv", "strategy_precision", "strategy_window_attention",
-           "transformer_qwen21"]
+           "source_frame", "source_txtimage", "strategy_kv", "strategy_precision",
+           "strategy_window_attention", "transformer_qwen21"]

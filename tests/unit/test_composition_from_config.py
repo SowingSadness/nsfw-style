@@ -54,7 +54,8 @@ def case_all_public_presets_compose() -> None:
         composition = check(cfg)
         assert composition.ok, f"{preset}: {composition.format_issues()}"
         assert composition.ports_out == frozenset({"pixels"}), (preset, composition.ports_out)
-        assert "source.project" in ids(spec_of(cfg)), preset
+        assert "source.frame" in ids(spec_of(cfg)), preset
+        assert "source.txtFileImage" in ids(spec_of(cfg)), preset
 
 
 def case_h3_is_unsupported_with_one_issue() -> None:
@@ -111,7 +112,8 @@ def case_refs_ports() -> None:
     assert t2i.inputs == frozenset({"prompt"}), t2i.inputs
     edit = spec_of(RunConfig.from_profile("VRAM16-preview", input="out/tests/in.png"))
     assert edit.inputs == frozenset({"prompt", "refs"}), edit.inputs
-    assert params_of(edit, "source.project")["refs"] == "out/tests/in.png"
+    assert params_of(edit, "source.txtFileImage")["Image1"] == "out/tests/in.png"
+    assert "Image2" not in params_of(edit, "source.txtFileImage")
 
 
 def case_encoder_device_and_stream() -> None:

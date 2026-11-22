@@ -91,10 +91,11 @@ RULES: tuple[Rule, ...] = (
     ),
     # -- стадии шага 6: источник, трансформер, постобработка ------------------ #
     Rule(
-        paths=("qwenstyle/cubes/source_project.py", "qwenstyle/io.py"),
-        tests=("cube/test_source_project.py",),
+        paths=("qwenstyle/cubes/source_frame.py", "qwenstyle/cubes/source_txtimage.py",
+               "qwenstyle/io.py"),
+        tests=("cube/test_source_cubes.py",),
         tags=frozenset({"contract"}),
-        why="источник проекта: промт/референсы, natural-порядок, ключи md5/sha",
+        why="источники входов: промт+Image1…N, геометрия кадра (frame), ключи md5/sha",
     ),
     Rule(
         paths=("qwenstyle/cubes/transformer_qwen21.py",),

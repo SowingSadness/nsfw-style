@@ -98,7 +98,7 @@ def case_parity_with_runconfig() -> None:
 def case_contract() -> None:
     cube = get_cube("encoder.qwen3vl")
     assert cube.stage is Stage.ENCODER, cube.stage
-    assert cube.consumes == frozenset({"prompt"}), cube.consumes
+    assert cube.consumes == frozenset({"prompt", "frame"}), cube.consumes  # сетка из frame
     assert cube.reads == frozenset({"refs"}), cube.reads
     assert cube.produces == "conditioning", cube.produces
     names = [p.name for p in cube.params]

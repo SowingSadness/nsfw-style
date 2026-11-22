@@ -144,7 +144,7 @@ def _self_test(ctx: CubeContext) -> None:
 CUBE: CubeSpec = register_cube(CubeSpec(
     id="transformer.qwen_image21",
     stage=Stage.TRANSFORMER,
-    consumes=frozenset({"conditioning"}),
+    consumes=frozenset({"conditioning", "frame"}),
     produces="latents",
     requires=frozenset({"fp8", "kv_offload"}),
     params=(
@@ -175,5 +175,6 @@ CUBE: CubeSpec = register_cube(CubeSpec(
     budget=ResourceBudget(weights_bf16_gib=14.2, weights_fp8_gib=6.6,
                           notes="Qwen-Image-2.1 transformer, 224 модуля; bf16 14.2 ГиБ, fp8-кэш 6.6 ГиБ"),
     self_test=_self_test,
-    doc="диффузионный трансформер Qwen-Image-2.1: conditioning -> latents (требует fp8 + kv_offload)",
+    doc="диффузионный трансформер Qwen-Image-2.1: conditioning+frame -> latents "
+        "(требует fp8 + kv_offload)",
 ))

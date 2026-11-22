@@ -147,7 +147,7 @@ def _self_test(ctx: CubeContext) -> None:
 CUBE: CubeSpec = register_cube(CubeSpec(
     id="encoder.qwen3vl",
     stage=Stage.ENCODER,
-    consumes=frozenset({"prompt"}),
+    consumes=frozenset({"prompt", "frame"}),
     reads=frozenset({"refs"}),
     produces="conditioning",
     params=(
@@ -176,5 +176,6 @@ CUBE: CubeSpec = register_cube(CubeSpec(
     budget=ResourceBudget(encoder_gib=17.5, disk_gib=17.5,
                           notes="Qwen3-VL-8B bf16 (750 тензоров, 4 шарда)"),
     self_test=_self_test,
-    doc="энкодер Qwen3-VL-8B: prompt+refs -> conditioning, стриминг весов, ключ кэша из портов",
+    doc="энкодер Qwen3-VL-8B: prompt+refs (сетка из frame) -> conditioning, стриминг весов, "
+        "ключ кэша из портов",
 ))

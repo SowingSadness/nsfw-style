@@ -33,7 +33,9 @@ sys.dont_write_bytecode = True
 from qwenstyle.compose import CubeBinding as B                        # noqa: E402
 from qwenstyle.compose import PipelineSpec, compose                    # noqa: E402
 from qwenstyle.cube import CubeContext, all_cubes, get_cube            # noqa: E402
-from qwenstyle.cubes import decoder_vae, post_esrgan, source_project, transformer_qwen21  # noqa: E402
+from qwenstyle.cubes import (                                         # noqa: E402
+    decoder_vae, post_esrgan, source_frame, source_txtimage, transformer_qwen21,
+)
 
 MACHINE = {"vram_gib": 16.0, "ram_gib": 63.6}
 
@@ -41,8 +43,8 @@ MACHINE = {"vram_gib": 16.0, "ram_gib": 63.6}
 def full_chain(**overrides: object) -> PipelineSpec:
     """Цепочка проекта 2912x2176: PE + окно внимания + kv offload + апскейл до 2160."""
     cubes = [
-        B("source.project", {"dir": "prompts/nita-camp-model", "refs": "refs-style",
-                             "aspect": "4:3", "size_px": 2176}),
+        B("source.frame", {"width": 2912, "height": 2176, "ref_crop_side": 768}),
+        B("source.txtFileImage", {"prompt": "prompt-tokyo-anime.txt", "Image1": "refs-style/a.jpg"}),
         B("rewrite.pe_llamacpp", {"model": "pe_i2i_heretic-Q4_K_M.gguf",
                                   "mmproj": "pe_i2i_heretic-mmproj-F16.gguf"}),
         B("encoder.qwen3vl", {}),
@@ -71,7 +73,8 @@ def case_full_chain_is_ok() -> None:
 
 def case_t2i_chain_is_ok() -> None:
     cubes = (
-        B("source.project", {"dir": "prompts/nita-camp-model", "refs": "-", "aspect": "16:9"}),
+        B("source.frame", {"width": 2560, "height": 1440}),
+        B("source.txtFileImage", {"prompt": "prompt-qwen.txt"}),
         B("encoder.qwen3vl", {}),
         B("strategy.precision.fp8", {}),
         B("strategy.kv_offload", {"mode": "true"}),
@@ -138,7 +141,8 @@ def case_missing_postprocess_is_reported() -> None:
 def case_stage_order_is_reported() -> None:
     cubes = (
         B("encoder.qwen3vl", {}),
-        B("source.project", {"dir": "prompts/x", "refs": "-"}),
+        B("source.frame", {"width": 2560, "height": 1440}),
+        B("source.txtFileImage", {"prompt": "prompt.txt"}),
     )
     composition = compose(PipelineSpec(name="backwards", cubes=cubes, inputs=frozenset({"prompt"})))
     assert "stage_order" in codes(composition), codes(composition)
@@ -161,11 +165,13 @@ def case_every_cube_in_registry_has_stage() -> None:
         if cube.self_test is not None:
             cube.self_test(ctx)
     ids = {cube.id for cube in all_cubes()}
-    for expected in ("source.project", "transformer.qwen_image21", "post.upscale.esrgan",
+    for expected in ("source.frame", "source.txtFileImage", "transformer.qwen_image21",
+                     "post.upscale.esrgan",
                      "post.colorfix", "post.upscale.seedvr2"):
         assert expected in ids, expected
     assert get_cube("transformer.qwen_image21").requires == frozenset({"fp8", "kv_offload"})
-    assert source_project.CUBE.outputs == frozenset({"prompt", "refs"})
+    assert source_txtimage.CUBE.outputs == frozenset({"prompt", "refs"})
+    assert source_frame.CUBE.outputs == frozenset({"frame"})
     assert transformer_qwen21.CUBE.backend if hasattr(transformer_qwen21.CUBE, "backend") else True
     assert post_esrgan.CUBE.id == "post.upscale.esrgan"
     assert decoder_vae.CUBE.id == "decoder.vae.qwen21"

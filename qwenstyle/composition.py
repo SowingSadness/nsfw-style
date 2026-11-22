@@ -11,7 +11,9 @@
 
 Правила проекции (единственное место, где конфиг превращается в кубики):
 
-* `source.project` — всегда: даже в `run` промт приходит файлом, а референсы — `--input`
+* `source.frame` — всегда: канвас и сетка референсов (порт `frame`);
+* `source.txtFileImage` — всегда: промт из файла и референсы (`--input a --input b` -> `Image1`,
+  `Image2`)
   (тогда `refs` указывает на конкретные файлы, а не на каталог проекта);
 * `encoder.qwen3vl` — только если бекенд объявляет `conditioning="precomputed"`: `internal`-модели
   (H3, FLUX.2) считают эмбеддинги сами, энкодер-кубик им не нужен;
@@ -29,6 +31,7 @@ from __future__ import annotations
 from typing import Any
 
 from .compose import Composition, CubeBinding, PipelineSpec, compose
+from .config import ASPECT_RATIOS
 from .cube import all_cubes
 
 #: Импорт пакета кубиков регистрирует все стадии в реестре (188 мс, без torch).
@@ -54,7 +57,7 @@ def unsupported_reason(cfg: Any) -> str | None:
         return (f"бекенд {backend!r} ещё не выражен кубиками "
                 f"(поддержаны: {', '.join(CUBE_BACKENDS)})")
     known = {cube.id for cube in all_cubes()}
-    missing = [cid for cid in ("source.project", "encoder.qwen3vl",
+    missing = [cid for cid in ("source.frame", "source.txtFileImage", "encoder.qwen3vl",
                                "transformer.qwen_image21", "decoder.vae.qwen21")
                if cid not in known]
     if missing:
@@ -66,24 +69,45 @@ def _sampler(cfg: Any, name: str, default: Any = None) -> Any:
     return (cfg.generation.sampler_kwargs or {}).get(name, default)
 
 
+def _frame_params(cfg: Any) -> dict[str, Any]:
+    """Геометрия из `RunConfig`: `size_px`/`aspect` -> `width`/`height`, `ref_px` -> `ref_crop_side`.
+
+    Тонкость: если `aspect` задан явно, канвас известен целиком (W и H), и тогда прежний `ref_px`
+    (высота сетки референсов) переводится в `ref_crop_side` тем же числом — семантика одна и та же.
+    Если `aspect` не задан, канвас зависит от референса (`width: 0`), и `ref_crop_side` остаётся
+    прежним `ref_px` — сетка считается от фактического канваса на прогоне.
+    """
+    ratio = None
+    if cfg.aspect:
+        ratio = ASPECT_RATIOS[str(cfg.aspect)] if str(cfg.aspect) in ASPECT_RATIOS else None
+    size_px = int(cfg.size_px or 1024)
+    ref_side = int(_sampler(cfg, "ref_px", 0) or 0)
+    params: dict[str, Any] = {"ref_crop_side": ref_side}
+    if ratio:
+        params["height"] = size_px
+        params["width"] = max(32, int(round(size_px * ratio / 32)) * 32)
+    else:
+        params["height"] = size_px
+        params["width"] = 0
+    return params
+
+
 def spec_of(cfg: Any, *, name: str = "") -> PipelineSpec:
     """Собрать `PipelineSpec` из `RunConfig` (без диска, без весов, без CUDA)."""
     gen, enc, up = cfg.generation, cfg.encoder, cfg.upscale
     refs = list(cfg.inputs or ([cfg.input] if cfg.input else []))
     cubes: list[CubeBinding] = []
 
-    # источник: файл промта + референсы (`--input`/`inputs`), иначе каталог проекта
-    source: dict[str, Any] = {
-        "dir": "",
-        "prompt": cfg.prompt_file or "",
-        "refs": "-" if not refs else (refs[0] if len(refs) == 1 else ""),
-        "aspect": cfg.aspect or "auto",
-        "size_px": int(cfg.size_px or 1024),
-        "seed": int(cfg.seed or 0),
-    }
+    # источник 1/2: геометрия кадра (канвас + сетка референсов) -> порт `frame`
+    cubes.append(CubeBinding("source.frame", _frame_params(cfg)))
+
+    # источник 2/2: промт из файла + явные референсы (`--input a --input b` -> Image1, Image2)
+    source: dict[str, Any] = {"prompt": cfg.prompt_file or ""}
+    for index, path in enumerate(refs[:10], start=1):
+        source[f"Image{index}"] = str(path)
     if not cfg.prompt_file and cfg.prompt:
         source["prompt"] = ""               # промт встроен в конфиг, файла нет
-    cubes.append(CubeBinding("source.project", source))
+    cubes.append(CubeBinding("source.txtFileImage", source))
 
     if gen.backend in PRECOMPUTED_BACKENDS:
         cubes.append(CubeBinding("encoder.qwen3vl", {

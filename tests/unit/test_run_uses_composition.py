@@ -74,7 +74,8 @@ def case_cubes_view_prints_tree() -> None:
     text = out.getvalue()
     assert code == 0, text
     assert "composition=VRAM16-4k-slide (ok)" in text, text[:200]
-    for stage in ("source.project", "encoder.qwen3vl", "strategy.precision.fp8",
+    for stage in ("source.frame", "source.txtFileImage", "encoder.qwen3vl",
+                  "strategy.precision.fp8",
                   "strategy.kv_offload", "strategy.window_attention",
                   "transformer.qwen_image21", "decoder.vae.qwen21",
                   "decoder.postprocess.image"):
