@@ -17,3 +17,4 @@ tests/check-tiny/
 # pi agent runs
 .pi/runs/
 .pi/worktrees/
+node_modules/
